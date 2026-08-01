@@ -91,7 +91,7 @@ This starts the GUI on `http://localhost:8080` with:
 - `vcf-token` (local Docker volume) — holds the activation code, the
   per-installation "software depot ID", and (since v1.3.0) the CLI itself
   once you upload it. Kept separate from the downloaded binaries on purpose.
-- `vcf-depot` (NFS volume) — `192.168.1.4:/mnt/Sol/General/vcf-depot`, where
+- `vcf-depot` (NFS volume) — eg `192.168.1.4:/mnt/Sol/General/vcf-depot`, where
   downloaded binaries land. Requires `nfs-common` (or equivalent) on the
   Docker host so the `local` volume driver can mount it, and `nfsvers=3`
   (this share doesn't answer on v4).
