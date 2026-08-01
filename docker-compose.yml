@@ -13,9 +13,6 @@ services:
       - vcf-depot:/mnt/vcf-depot
     environment:
       PORT: "8080"
-      # Lowest VCF major.minor to scan for release discovery. Everything at
-      # or above this is picked up automatically as Broadcom ships it.
-      RELEASE_SCAN_START_VERSION: "9.0"
       # UID/GID the app runs as - defaults to 1000:1000, which just works
       # for a fresh depot share. Only set these if your NFS depot has
       # pre-existing content owned by someone else (`ls -l` the mount to

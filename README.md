@@ -55,9 +55,6 @@ services:
       - vcf-depot:/mnt/vcf-depot
     environment:
       PORT: "8080"
-      # Lowest VCF major.minor to scan for release discovery. Everything at
-      # or above this is picked up automatically as Broadcom ships it.
-      RELEASE_SCAN_START_VERSION: "9.0"
       # UID/GID the app runs as - defaults to 1000:1000, which just works
       # for a fresh depot share. Only set these if your NFS depot has
       # pre-existing content owned by someone else (`ls -l` the mount to
@@ -136,12 +133,15 @@ Open the GUI and click **Settings**:
 
 ## Using it
 
-- **Releases** panel discovers every released VCF version dynamically by
-  querying the depot with an open-ended range (`--vcf-version=9.0..`,
-  configurable via `RELEASE_SCAN_START_VERSION`) and grouping by
-  major.minor.patch family. New releases show up automatically the next
-  time the cache refreshes (15 min TTL, or hit **Refresh**) — no code
-  changes needed.
+- **Releases** panel discovers every 9.0+ VCF version dynamically by querying
+  the depot with an open-ended range (`--vcf-version=9.0..`) and grouping by
+  major.minor.patch family. New releases show up automatically the next time
+  the cache refreshes (15 min TTL, or hit **Refresh**) — no code changes
+  needed. Pre-9.0 releases (5.0, 5.1, 5.2) are listed too, but hardcoded
+  rather than discovered — the depot has no component whose version tracks
+  the release version for that older line the way it does from 9.0 on, so
+  there's nothing to scan. That product line is done shipping new releases,
+  so this isn't expected to need updates.
 - **Manual version** input lets you query an arbitrary VCF version directly.
 - Pick SKU (VCF/VVF) and Type (Install/Upgrade/Both), select binaries by
   checkbox, then **Download selected**. Progress streams live via

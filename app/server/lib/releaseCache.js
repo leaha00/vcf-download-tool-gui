@@ -1,6 +1,11 @@
 const { runCli } = require('./cliRunner');
 const { parseTable } = require('./tableParser');
-const { TOKEN_FILE, RELEASE_SCAN_START, RELEASE_CACHE_TTL_MS } = require('./config');
+const {
+  TOKEN_FILE,
+  RELEASE_SCAN_START,
+  LEGACY_RELEASE_VERSIONS,
+  RELEASE_CACHE_TTL_MS,
+} = require('./config');
 
 // SDDC_MANAGER_VCF's own component version tracks the VCF release version
 // 1:1 (e.g. row version "9.1.0.0100.25428926" == vcf-version "9.1.0.0100",
@@ -77,6 +82,45 @@ async function scanReleases() {
   return releases;
 }
 
+// Pre-9.0 releases have no anchor component to scan with (see
+// LEGACY_RELEASE_VERSIONS in config.js), so each hardcoded major.minor is
+// checked directly instead - the same query a manual "5.2" search runs,
+// just used to confirm the release exists rather than to list its binaries.
+// One release group per version, since there's no way to discover
+// individual patch builds (a.b.c.0100, ...) within it the way the dynamic
+// scan does for 9.x.
+async function scanLegacyReleases() {
+  const checks = await Promise.all(
+    LEGACY_RELEASE_VERSIONS.map(async (version) => {
+      const { stdout } = await runCli([
+        'binaries',
+        'list',
+        `--depot-download-activation-code-file=${TOKEN_FILE}`,
+        `--vcf-version=${version}`,
+        '--sku=VCF',
+        '--type=INSTALL',
+      ]);
+      const exists = parseTable(stdout).length > 0;
+      return { version, exists };
+    })
+  );
+
+  return checks
+    .filter((c) => c.exists)
+    .sort((a, b) => compareVersions(a.version, b.version))
+    .reverse() // newest legacy family first, matching the dynamic list
+    .map(({ version }) => ({
+      bucket: version,
+      label: `${version}.x`,
+      versions: [{ vcfVersion: version, bucket: version, releaseDate: null }],
+    }));
+}
+
+async function scanAllReleases() {
+  const [dynamic, legacy] = await Promise.all([scanReleases(), scanLegacyReleases()]);
+  return [...dynamic, ...legacy];
+}
+
 async function getReleases({ forceRefresh = false } = {}) {
   const fresh = cache && Date.now() - cache.fetchedAt < RELEASE_CACHE_TTL_MS;
   if (fresh && !forceRefresh) {
@@ -84,7 +128,7 @@ async function getReleases({ forceRefresh = false } = {}) {
   }
 
   if (!inflight) {
-    inflight = scanReleases()
+    inflight = scanAllReleases()
       .then((releases) => {
         cache = { releases, fetchedAt: Date.now() };
         return cache;

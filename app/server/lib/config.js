@@ -30,9 +30,19 @@ const DEPOT_DIR = process.env.DEPOT_DIR || '/mnt/vcf-depot';
 const JOB_HISTORY_FILE = path.join(TOKEN_DIR, 'job-history.json');
 
 // Lowest VCF major.minor to scan from when discovering releases dynamically.
-// Anything released at or above this is picked up automatically - no code
-// changes needed when Broadcom ships a new x.y.z.
-const RELEASE_SCAN_START = process.env.RELEASE_SCAN_START_VERSION || '9.0';
+// Not configurable: the depot's anchor component this scan relies on
+// (SDDC_MANAGER_VCF - see lib/releaseCache.js) only exists from 9.0 onward,
+// so anything lower is a no-op here regardless of what it's set to. Pre-9.0
+// releases are covered separately by LEGACY_RELEASE_VERSIONS below.
+const RELEASE_SCAN_START = '9.0';
+
+// VCF major.minor versions released before 9.0, hardcoded because the
+// depot has no component whose own version tracks the release version 1:1
+// for that era (unlike SDDC_MANAGER_VCF from 9.0 on), so they can't be
+// discovered the same way. Safe to hardcode - this product line is EOL and
+// Broadcom won't be shipping new releases under it. Sorted oldest first;
+// releaseCache.js reverses this when building the newest-first release list.
+const LEGACY_RELEASE_VERSIONS = ['5.0', '5.1', '5.2'];
 
 // How long a discovered release list is cached in memory before a fresh
 // scan is triggered automatically (in addition to the manual refresh button).
@@ -59,6 +69,7 @@ module.exports = {
   DEPOT_DIR,
   JOB_HISTORY_FILE,
   RELEASE_SCAN_START,
+  LEGACY_RELEASE_VERSIONS,
   RELEASE_CACHE_TTL_MS,
   PORT,
   APP_VERSION: pkgVersion,
