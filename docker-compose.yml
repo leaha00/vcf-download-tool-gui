@@ -1,0 +1,40 @@
+services:
+  vcf-download-tool-gui:
+    image: ghcr.io/leaha00/vcf-download-tool-gui:latest
+    container_name: vcf-download-tool-gui
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Also where the CLI itself lives once you upload it through the GUI's
+      # "Upload CLI" button - see README.md "Bring your own CLI". No
+      # separate volume needed for it.
+      - vcf-token:/data/token
+      - vcf-depot:/mnt/vcf-depot
+    environment:
+      PORT: "8080"
+      # Lowest VCF major.minor to scan for release discovery. Everything at
+      # or above this is picked up automatically as Broadcom ships it.
+      RELEASE_SCAN_START_VERSION: "9.0"
+      # UID/GID the app runs as - defaults to 1000:1000, which just works
+      # for a fresh depot share. Only set these if your NFS depot has
+      # pre-existing content owned by someone else (`ls -l` the mount to
+      # check); set them to match its owner. No rebuild needed either way.
+      # See README.md "Permissions".
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+
+volumes:
+  # Local, container-host-backed volume for the activation code - kept
+  # separate from the depot store on purpose.
+  vcf-token:
+    driver: local
+
+  # NFS-backed volume for downloaded binaries. Requires nfs-common (or
+  # equivalent) on the Docker host so the local volume driver can mount it.
+  vcf-depot:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: "addr=192.168.1.4,nolock,soft,rw"
+      device: ":/mnt/Sol/General/vcf-depot"
