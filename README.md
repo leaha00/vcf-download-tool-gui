@@ -4,6 +4,12 @@ A web GUI wrapper around Broadcom's `vcf-download-tool`, because it cant
 just be me who hates the CLI tool, cant remember the commands and wants
 something pretty <3.
 
+# VCF CLI Support
+The following versions of the CLI were tested and work
+
+- 9.1.0.0100
+- 9.1.0.0400
+
 # Features
 
 - Turns the VCF download tool from Broadcom into an easy to use GUI application
