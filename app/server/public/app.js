@@ -148,7 +148,15 @@ $('upload-cli-submit-btn').addEventListener('click', () => {
 
 // ---------- Colors ----------
 const COLOR_STORAGE_KEY = 'vcf-gui-colors';
-const DEFAULT_COLORS = { bg: '#000000', accent: '#9b51e0' };
+const COLOR_FIELDS = [
+  { key: 'bg', varName: '--bg', inputId: 'color-bg-input', default: '#000000' },
+  { key: 'panel', varName: '--panel', inputId: 'color-panel-input', default: '#121212' },
+  { key: 'border', varName: '--border', inputId: 'color-border-input', default: '#2c343d' },
+  { key: 'text', varName: '--text', inputId: 'color-text-input', default: '#e7ecf1' },
+  { key: 'textDim', varName: '--text-dim', inputId: 'color-textdim-input', default: '#9aa7b4' },
+  { key: 'accent', varName: '--accent', inputId: 'color-accent-input', default: '#9b51e0' },
+  { key: 'danger', varName: '--danger', inputId: 'color-danger-input', default: '#c0392b' },
+];
 
 function loadStoredColors() {
   try {
@@ -160,11 +168,10 @@ function loadStoredColors() {
 
 function applyColors(colors) {
   const root = document.documentElement;
-  if (colors.bg) root.style.setProperty('--bg', colors.bg);
-  if (colors.accent) {
-    root.style.setProperty('--accent', colors.accent);
-    root.style.setProperty('--accent-dim', `${colors.accent}22`);
-  }
+  COLOR_FIELDS.forEach(({ key, varName }) => {
+    if (colors[key]) root.style.setProperty(varName, colors[key]);
+  });
+  if (colors.accent) root.style.setProperty('--accent-dim', `${colors.accent}22`);
 }
 
 function setStoredColor(key, value) {
@@ -175,18 +182,19 @@ function setStoredColor(key, value) {
 
 function initColorInputs() {
   const stored = loadStoredColors();
-  $('color-bg-input').value = stored.bg || DEFAULT_COLORS.bg;
-  $('color-accent-input').value = stored.accent || DEFAULT_COLORS.accent;
+  COLOR_FIELDS.forEach(({ key, inputId, default: def }) => {
+    $(inputId).value = stored[key] || def;
+  });
 }
 
-$('color-bg-input').addEventListener('input', (e) => setStoredColor('bg', e.target.value));
-$('color-accent-input').addEventListener('input', (e) => setStoredColor('accent', e.target.value));
+COLOR_FIELDS.forEach(({ key, inputId }) => {
+  $(inputId).addEventListener('input', (e) => setStoredColor(key, e.target.value));
+});
 
 $('color-reset-btn').addEventListener('click', () => {
   localStorage.removeItem(COLOR_STORAGE_KEY);
   const root = document.documentElement;
-  root.style.removeProperty('--bg');
-  root.style.removeProperty('--accent');
+  COLOR_FIELDS.forEach(({ varName }) => root.style.removeProperty(varName));
   root.style.removeProperty('--accent-dim');
   initColorInputs();
   toast('Colors reset to default.');
@@ -448,6 +456,7 @@ function parseDate(str) {
 }
 
 const SORT_ACCESSORS = {
+  component_full_name: (b) => (b.component_full_name || '').toLowerCase(),
   release_date: (b) => parseDate(b.release_date),
   size: (b) => parseSize(b.size),
   downloaded: (b) => (b.downloaded ? 1 : 0),
@@ -457,7 +466,11 @@ function applySort() {
   if (!state.sortKey) return;
   const accessor = SORT_ACCESSORS[state.sortKey];
   const dir = state.sortDir;
-  state.binaries.sort((a, b) => (accessor(a) - accessor(b)) * dir);
+  state.binaries.sort((a, b) => {
+    const av = accessor(a);
+    const bv = accessor(b);
+    return typeof av === 'string' ? av.localeCompare(bv) * dir : (av - bv) * dir;
+  });
 }
 
 function updateSortIndicators() {

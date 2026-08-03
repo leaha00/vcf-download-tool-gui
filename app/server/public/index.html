@@ -12,11 +12,11 @@
       try {
         var colors = JSON.parse(localStorage.getItem('vcf-gui-colors')) || {};
         var root = document.documentElement;
-        if (colors.bg) root.style.setProperty('--bg', colors.bg);
-        if (colors.accent) {
-          root.style.setProperty('--accent', colors.accent);
-          root.style.setProperty('--accent-dim', colors.accent + '22');
-        }
+        var varNames = { bg: '--bg', panel: '--panel', border: '--border', text: '--text', textDim: '--text-dim', accent: '--accent', danger: '--danger' };
+        Object.keys(varNames).forEach(function (key) {
+          if (colors[key]) root.style.setProperty(varNames[key], colors[key]);
+        });
+        if (colors.accent) root.style.setProperty('--accent-dim', colors.accent + '22');
       } catch (e) {
         // ignore - falls back to stylesheet defaults
       }
@@ -101,7 +101,7 @@
             <thead>
               <tr>
                 <th></th>
-                <th>Full name</th>
+                <th id="sort-component_full_name" class="sortable">Full name<span class="sort-indicator"></span></th>
                 <th>Version</th>
                 <th>Type</th>
                 <th id="sort-release_date" class="sortable">Release date<span class="sort-indicator"></span></th>
@@ -180,8 +180,28 @@
           <input id="color-bg-input" type="color" />
         </label>
         <label class="color-field">
+          Panel
+          <input id="color-panel-input" type="color" />
+        </label>
+        <label class="color-field">
+          Border
+          <input id="color-border-input" type="color" />
+        </label>
+        <label class="color-field">
+          Text
+          <input id="color-text-input" type="color" />
+        </label>
+        <label class="color-field">
+          Dim text
+          <input id="color-textdim-input" type="color" />
+        </label>
+        <label class="color-field">
           Accent
           <input id="color-accent-input" type="color" />
+        </label>
+        <label class="color-field">
+          Danger
+          <input id="color-danger-input" type="color" />
         </label>
       </div>
       <div class="modal-actions">

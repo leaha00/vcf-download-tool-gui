@@ -224,7 +224,7 @@ td:nth-child(2) { white-space: normal; min-width: 200px; }
 
 .search-input { width: 220px; }
 
-.color-fields { display: flex; gap: 1.5rem; }
+.color-fields { display: flex; flex-wrap: wrap; gap: 1rem 1.5rem; }
 .color-field { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.78rem; color: var(--text-dim); }
 .color-field input[type="color"] {
   width: 3.5rem;
