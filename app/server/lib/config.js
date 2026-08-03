@@ -7,12 +7,10 @@ const TOKEN_FILE = path.join(TOKEN_DIR, 'activation-code.txt');
 // The CLI isn't bind-mounted anymore - it's uploaded through the GUI (see
 // lib/cliInstall.js) and lives inside the same persistent volume as the
 // token/job-history, so it's never configurable via env var. cli-staging is
-// where an upload is extracted and validated before being swapped in;
-// cli-previous is the one-generation rollback kept from the last swap.
+// where an upload is extracted and validated before being swapped in.
 const CLI_DIR = path.join(TOKEN_DIR, 'cli');
 const CLI_BIN = path.join(CLI_DIR, 'bin', 'vcf-download-tool');
 const CLI_STAGING_DIR = path.join(TOKEN_DIR, 'cli-staging');
-const CLI_PREVIOUS_DIR = path.join(TOKEN_DIR, 'cli-previous');
 
 // The CLI persists a per-installation "software depot ID" (a UUID that has
 // to be registered against the activation code on the Broadcom portal). It
@@ -61,7 +59,6 @@ module.exports = {
   CLI_DIR,
   CLI_BIN,
   CLI_STAGING_DIR,
-  CLI_PREVIOUS_DIR,
   TOKEN_DIR,
   TOKEN_FILE,
   XDG_DATA_HOME,

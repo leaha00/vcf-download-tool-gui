@@ -80,7 +80,7 @@ async function refreshUploadCliStatus() {
   try {
     const status = await api('/cli/status');
     $('upload-cli-status').textContent = status.installed
-      ? `Installed — updated ${new Date(status.installedAt).toLocaleString()}${status.hasPrevious ? ' (previous version kept as backup)' : ''}`
+      ? `Installed — updated ${new Date(status.installedAt).toLocaleString()}`
       : 'No CLI installed yet — upload the tar.gz you downloaded from the Broadcom portal.';
   } catch (err) {
     $('upload-cli-status').textContent = '';

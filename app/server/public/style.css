@@ -56,35 +56,40 @@ body {
 .storage-bar { width: 160px; }
 .progress-bar-fill-warn { background: var(--danger); }
 
+/* A real 2x2 grid (not two independent flex columns) so the top row
+   (Manual version / Filters) always sizes to its tallest cell and the
+   bottom row (Releases / Table) always starts at the same offset and
+   fills the same height - no matter how much either panel's content grows. */
 .layout {
   display: grid;
   grid-template-columns: 320px 1fr;
+  grid-template-rows: auto 1fr;
   gap: 1rem;
   padding: 1rem;
   flex: 1;
   min-height: 0;
 }
 
-.sidebar, .content {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
+.sidebar, .content { display: contents; }
 
-/* Sidebar's last panel and the table panel both grow to fill whatever
-   vertical space is available, so the two columns' bottoms line up
-   instead of the sidebar (usually shorter) trailing off early. */
+.sidebar > .panel:first-child { grid-column: 1; grid-row: 1; }
+.filters.panel { grid-column: 2; grid-row: 1; }
+.releases-panel { grid-column: 1; grid-row: 2; }
+.table-panel { grid-column: 2; grid-row: 2; }
+
 .releases-panel, .table-panel {
-  flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
 @media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; flex: none; }
-  .sidebar, .content { display: block; }
-  .releases-panel, .table-panel { display: block; flex: none; }
+  .layout { grid-template-columns: 1fr; grid-template-rows: none; flex: none; }
+  .sidebar > .panel:first-child, .filters.panel, .releases-panel, .table-panel {
+    grid-column: auto;
+    grid-row: auto;
+  }
+  .releases-panel, .table-panel { display: block; }
   .releases-list { flex: none !important; max-height: 55vh; }
   .table-wrap { flex: none !important; }
 }
@@ -94,17 +99,6 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 1rem;
-}
-
-.panel + .panel { margin-top: 1rem; }
-
-/* Manual version (sidebar) and Filters (content) sit in separate flex
-   columns, so they can't stretch to match each other automatically -
-   pin both to the same min-height so their tops and the panels below
-   them line up. */
-.sidebar > .panel:first-child,
-.filters.panel {
-  min-height: 5.9rem;
 }
 
 .panel h2 {

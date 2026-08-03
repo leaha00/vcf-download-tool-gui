@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const { CLI_DIR, CLI_STAGING_DIR, CLI_PREVIOUS_DIR, XDG_DATA_HOME } = require('./config');
+const { CLI_DIR, CLI_STAGING_DIR, XDG_DATA_HOME } = require('./config');
 const { acquireCliLock } = require('./cliRunner');
 const cliVersion = require('./cliVersion');
 
@@ -135,10 +135,7 @@ async function installFromUpload(archivePath) {
       throw new CliInstallError(result.reason);
     }
 
-    // One generation of rollback safety: keep the previously-working CLI
-    // rather than deleting it outright.
-    rmrf(CLI_PREVIOUS_DIR);
-    if (fs.existsSync(CLI_DIR)) fs.renameSync(CLI_DIR, CLI_PREVIOUS_DIR);
+    rmrf(CLI_DIR);
     fs.renameSync(CLI_STAGING_DIR, CLI_DIR);
 
     cliVersion.invalidate();
@@ -158,7 +155,7 @@ function getInstallStatus() {
       installedAt = null;
     }
   }
-  return { installed, installedAt, hasPrevious: fs.existsSync(CLI_PREVIOUS_DIR) };
+  return { installed, installedAt };
 }
 
 module.exports = { installFromUpload, getInstallStatus, CliInstallError };
