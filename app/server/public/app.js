@@ -13,6 +13,19 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+// ---------- Content-pane view switching (Browse / Downloads / Settings) ----------
+// These three panes live in the content column as siblings, not overlays -
+// only one is ever visible at a time. Leaving Settings stops its stats poll.
+const VIEWS = { browse: 'browse-view', downloads: 'downloads-view', settings: 'settings-view', logs: 'logs-view' };
+
+function switchView(view) {
+  Object.entries(VIEWS).forEach(([key, id]) => $(id).classList.toggle('hidden', key !== view));
+  $('downloads-nav-btn').classList.toggle('active', view === 'downloads');
+  $('settings-nav-btn').classList.toggle('active', view === 'settings');
+  $('logs-nav-btn').classList.toggle('active', view === 'logs');
+  if (view !== 'settings') stopSettingsPolling();
+}
+
 function toast(message, isError = false) {
   const el = $('toast');
   el.textContent = message;
@@ -75,6 +88,57 @@ async function loadStorage() {
   }
 }
 
+// ---------- Resource Usage (this container's own CPU/mem/disk) ----------
+function setStatBar(prefix, percent, detailText) {
+  const percentEl = $(`stat-${prefix}-percent`);
+  const fillEl = $(`stat-${prefix}-fill`);
+  const detailEl = $(`stat-${prefix}-detail`);
+
+  if (percent == null) {
+    percentEl.textContent = '–';
+    fillEl.style.width = '0%';
+    fillEl.classList.remove('progress-bar-fill-warn');
+  } else {
+    percentEl.textContent = `${percent}%`;
+    fillEl.style.width = `${Math.min(percent, 100)}%`;
+    fillEl.classList.toggle('progress-bar-fill-warn', percent >= 85);
+  }
+  detailEl.textContent = detailText;
+}
+
+async function loadSystemStats() {
+  let stats;
+  try {
+    stats = await api('/system-stats');
+  } catch (err) {
+    return;
+  }
+
+  const cpu = stats.cpu;
+  setStatBar('cpu', cpu ? cpu.percent : null, !cpu
+    ? 'unavailable'
+    : cpu.limitCores
+      ? `of ${cpu.limitCores} core${cpu.limitCores === 1 ? '' : 's'} limit`
+      : 'of host cores (no limit set)');
+
+  const mem = stats.memory;
+  setStatBar('mem', mem ? mem.usedPercent : null, !mem
+    ? 'unavailable'
+    : mem.limitBytes
+      ? `${formatSize(mem.usedBytes)} / ${formatSize(mem.limitBytes)}`
+      : `${formatSize(mem.usedBytes)} (no limit set)`);
+
+  // Two disk cards side by side - depot store and the data volume
+  // (token/CLI/job history). Indexed by position; either can be missing.
+  const disks = stats.disk || [];
+  [0, 1].forEach((i) => {
+    const disk = disks[i];
+    $(`stat-disk${i}-label`).textContent = disk && disk.label ? disk.label : (i === 0 ? 'Depot' : 'Data');
+    setStatBar(`disk${i}`, disk ? disk.usedPercent : null,
+      disk ? `${formatSize(disk.usedBytes)} / ${formatSize(disk.totalBytes)}` : 'unavailable');
+  });
+}
+
 // ---------- Upload CLI ----------
 async function refreshUploadCliStatus() {
   try {
@@ -86,12 +150,6 @@ async function refreshUploadCliStatus() {
     $('upload-cli-status').textContent = '';
   }
 }
-
-$('upload-cli-btn').addEventListener('click', () => {
-  $('upload-cli-modal').classList.remove('hidden');
-  refreshUploadCliStatus();
-});
-$('upload-cli-close-btn').addEventListener('click', () => $('upload-cli-modal').classList.add('hidden'));
 
 $('upload-cli-submit-btn').addEventListener('click', () => {
   const input = $('upload-cli-input');
@@ -215,15 +273,68 @@ async function refreshDepotIdStatus() {
     : 'No software depot ID set yet — generate one or paste an existing one below.';
 }
 
-function openSettings() {
-  $('settings-modal').classList.remove('hidden');
-  refreshTokenStatus().catch((err) => toast(err.message, true));
-  refreshDepotIdStatus().catch((err) => toast(err.message, true));
-  initColorInputs();
+// ---------- Scheduled refresh ----------
+function updateScheduleDaysVisibility() {
+  $('schedule-days-wrap').classList.toggle('hidden', $('schedule-mode-input').value !== 'weekly');
 }
 
-$('settings-btn').addEventListener('click', openSettings);
-$('settings-close-btn').addEventListener('click', () => $('settings-modal').classList.add('hidden'));
+async function refreshScheduleStatus() {
+  const data = await api('/schedule');
+  $('schedule-enabled-input').checked = !!data.enabled;
+  $('schedule-mode-input').value = data.mode || 'daily';
+  $('schedule-time-input').value = data.time || '03:00';
+  document.querySelectorAll('.schedule-day-input').forEach((cb) => {
+    cb.checked = (data.days || []).includes(Number(cb.value));
+  });
+  updateScheduleDaysVisibility();
+
+  $('schedule-server-time').textContent = data.serverTime
+    ? `${new Date(data.serverTime).toLocaleString()}, ${data.serverTimeZone || 'unknown timezone'}`
+    : '–';
+  $('schedule-status').textContent = data.lastRunAt
+    ? `Last scheduled scan: ${new Date(data.lastRunAt).toLocaleString()}`
+    : 'No scheduled scan has run yet.';
+}
+
+$('schedule-mode-input').addEventListener('change', updateScheduleDaysVisibility);
+
+$('schedule-save-btn').addEventListener('click', async () => {
+  const enabled = $('schedule-enabled-input').checked;
+  const mode = $('schedule-mode-input').value;
+  const time = $('schedule-time-input').value;
+  const days = [...document.querySelectorAll('.schedule-day-input:checked')].map((cb) => Number(cb.value));
+
+  try {
+    await api('/schedule', { method: 'POST', body: JSON.stringify({ enabled, mode, time, days }) });
+    toast('Schedule saved.');
+    await refreshScheduleStatus();
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+// Only refreshes the Resource Usage cards - never touches Colors/Token/
+// Depot ID fields, so it's safe to keep running while the user is mid-edit
+// on anything else in this view. Polling only runs while the view is
+// showing, not in the background.
+let systemStatsInterval = null;
+
+function stopSettingsPolling() {
+  clearInterval(systemStatsInterval);
+  systemStatsInterval = null;
+}
+
+$('settings-nav-btn').addEventListener('click', () => {
+  switchView('settings');
+  refreshUploadCliStatus();
+  refreshTokenStatus().catch((err) => toast(err.message, true));
+  refreshDepotIdStatus().catch((err) => toast(err.message, true));
+  refreshScheduleStatus().catch((err) => toast(err.message, true));
+  initColorInputs();
+  loadSystemStats();
+  clearInterval(systemStatsInterval);
+  systemStatsInterval = setInterval(loadSystemStats, 5000);
+});
 
 $('token-save-btn').addEventListener('click', async () => {
   const token = $('token-input').value;
@@ -291,6 +402,42 @@ async function loadReleases(forceRefresh = false) {
   }
 }
 
+function renderVersionItem(v) {
+  const item = document.createElement('div');
+  item.className = 'release-version-item';
+  item.dataset.version = v.vcfVersion;
+  item.innerHTML = `<span>${escapeHtml(v.vcfVersion)}</span><span class="date">${escapeHtml(v.releaseDate || '')}</span>`;
+  item.addEventListener('click', () => selectVersion(v.vcfVersion, item));
+  return item;
+}
+
+// Bucket groups are usually a.b.c with several a.b.c.d builds inside
+// (rendered as their own collapsible sub-group), except the legacy 5.x line
+// where the depot only exposes the bare a.b version itself with nothing
+// further to drill into - those render as a plain leaf right under the
+// family instead of a pointless single-child expand step.
+function renderBucketGroup(group) {
+  if (group.versions.length === 1 && group.versions[0].vcfVersion === group.bucket) {
+    return renderVersionItem(group.versions[0]);
+  }
+
+  const groupEl = document.createElement('div');
+  groupEl.className = 'release-group';
+
+  const header = document.createElement('div');
+  header.className = 'release-group-header';
+  header.innerHTML = `<span><span class="caret">▸</span> ${escapeHtml(group.label)}</span><span class="meta">${group.versions.length}</span>`;
+  header.addEventListener('click', () => groupEl.classList.toggle('open'));
+  groupEl.appendChild(header);
+
+  const versionsEl = document.createElement('div');
+  versionsEl.className = 'release-versions';
+  for (const v of group.versions) versionsEl.appendChild(renderVersionItem(v));
+  groupEl.appendChild(versionsEl);
+
+  return groupEl;
+}
+
 function renderReleases() {
   const list = $('releases-list');
   list.innerHTML = '';
@@ -299,32 +446,23 @@ function renderReleases() {
     return;
   }
 
-  for (const group of state.releases) {
-    const groupEl = document.createElement('div');
-    groupEl.className = 'release-group';
+  for (const family of state.releases) {
+    const familyEl = document.createElement('div');
+    familyEl.className = 'release-family';
 
+    const totalVersions = family.groups.reduce((n, g) => n + g.versions.length, 0);
     const header = document.createElement('div');
-    header.className = 'release-group-header';
-    header.innerHTML = `<span><span class="caret">▸</span> ${escapeHtml(group.label)}</span><span class="meta">${group.versions.length}</span>`;
-    header.addEventListener('click', () => groupEl.classList.toggle('open'));
-    groupEl.appendChild(header);
+    header.className = 'release-family-header';
+    header.innerHTML = `<span><span class="caret">▸</span> ${escapeHtml(family.label)}</span><span class="meta">${totalVersions}</span>`;
+    header.addEventListener('click', () => familyEl.classList.toggle('open'));
+    familyEl.appendChild(header);
 
-    const versionsEl = document.createElement('div');
-    versionsEl.className = 'release-versions';
-    for (const v of group.versions) {
-      const item = document.createElement('div');
-      item.className = 'release-version-item';
-      item.dataset.version = v.vcfVersion;
-      item.innerHTML = `<span>${escapeHtml(v.vcfVersion)}</span><span class="date">${escapeHtml(v.releaseDate || '')}</span>`;
-      item.addEventListener('click', () => selectVersion(v.vcfVersion, item));
-      versionsEl.appendChild(item);
-    }
-    groupEl.appendChild(versionsEl);
+    const groupsEl = document.createElement('div');
+    groupsEl.className = 'release-family-groups';
+    for (const group of family.groups) groupsEl.appendChild(renderBucketGroup(group));
+    familyEl.appendChild(groupsEl);
 
-    // Auto-expand the newest release family.
-    if (group === state.releases[0]) groupEl.classList.add('open');
-
-    list.appendChild(groupEl);
+    list.appendChild(familyEl);
   }
 }
 
@@ -333,23 +471,12 @@ function selectVersion(version, el) {
   if (el) el.classList.add('active');
   state.selectedVersion = version;
   $('current-version').textContent = version;
-  $('manual-version').value = version;
+  switchView('browse');
   loadBinaries();
 }
 
 $('refresh-releases-btn').addEventListener('click', () => loadReleases(true));
-
-$('manual-load-btn').addEventListener('click', () => {
-  const v = $('manual-version').value.trim();
-  if (!v) {
-    toast('Enter a VCF version first, e.g. 9.1.0.0100', true);
-    return;
-  }
-  selectVersion(v, null);
-});
-$('manual-version').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') $('manual-load-btn').click();
-});
+$('releases-nav-header').addEventListener('click', () => switchView('browse'));
 
 // ---------- Binaries ----------
 $('sku-select').addEventListener('change', () => state.selectedVersion && loadBinaries());
@@ -549,7 +676,7 @@ async function refreshJobs() {
     state.jobs = data.jobs;
     updateLiveStatusMap();
     renderBinaries();
-    if (!$('downloads-modal').classList.contains('hidden')) renderDownloadsList();
+    if (!$('downloads-view').classList.contains('hidden')) renderDownloadsList();
 
     const anyRunning = state.jobs.some((j) => j.status === 'running');
     if (anyRunning) loadStorage();
@@ -600,26 +727,20 @@ function renderDownloadsList() {
       </div>
       <div class="download-job-binaries">${escapeHtml(jobSummaryLabel(job))}</div>
     `;
-    if (job.status === 'running') {
-      const viewBtn = document.createElement('button');
-      viewBtn.className = 'btn btn-ghost btn-small';
-      viewBtn.textContent = 'View live log';
-      viewBtn.addEventListener('click', () => {
-        $('downloads-modal').classList.add('hidden');
-        openDownloadLog(job.id);
-      });
-      row.appendChild(viewBtn);
-    }
+    const viewBtn = document.createElement('button');
+    viewBtn.className = 'btn btn-ghost btn-small';
+    viewBtn.textContent = 'View log';
+    viewBtn.addEventListener('click', () => openDownloadLog(job.id));
+    row.appendChild(viewBtn);
     list.appendChild(row);
   }
 }
 
-$('downloads-btn').addEventListener('click', () => {
-  $('downloads-modal').classList.remove('hidden');
+$('downloads-nav-btn').addEventListener('click', () => {
+  switchView('downloads');
   renderDownloadsList();
   refreshJobs();
 });
-$('downloads-close-btn').addEventListener('click', () => $('downloads-modal').classList.add('hidden'));
 
 // ---------- Download ----------
 function openDownloadLog(jobId) {
@@ -686,6 +807,104 @@ $('download-close-btn').addEventListener('click', () => $('download-modal').clas
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+// ---------- Logs: the CLI's own log directory (cli/log), not our per-job
+// download logs above ----------
+let selectedLogName = null;
+
+async function loadCliLogs() {
+  const list = $('logs-list');
+  try {
+    const data = await api('/cli-logs');
+    if (!data.exists || data.entries.length === 0) {
+      list.innerHTML = '<div class="hint">No CLI logs yet — they appear here once the CLI has run at least once.</div>';
+      return;
+    }
+
+    list.innerHTML = '';
+    for (const entry of data.entries) {
+      const row = document.createElement('div');
+      row.className = 'download-job';
+      const viewable = !entry.isDir && entry.kind !== 'other';
+      row.innerHTML = `
+        <div class="download-job-header">
+          <span class="job-status-badge job-status-${entry.kind === 'text' ? 'running' : 'complete'}">${entry.kind === 'text' ? 'current' : entry.kind === 'archive' ? 'archived' : 'other'}</span>
+          <span class="meta">${escapeHtml(new Date(entry.mtimeMs).toLocaleString())} — ${formatSize(entry.size)}</span>
+        </div>
+        <div class="download-job-binaries">${escapeHtml(entry.name)}</div>
+      `;
+      if (viewable) {
+        const viewBtn = document.createElement('button');
+        viewBtn.className = 'btn btn-ghost btn-small';
+        viewBtn.textContent = 'View';
+        viewBtn.addEventListener('click', () => viewCliLog(entry.name));
+        row.appendChild(viewBtn);
+      }
+      list.appendChild(row);
+    }
+  } catch (err) {
+    list.innerHTML = `<div class="hint">Failed to load logs: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function logContentBanner(text) {
+  const banner = $('log-content-banner');
+  if (!text) {
+    banner.classList.add('hidden');
+    banner.textContent = '';
+    return;
+  }
+  banner.textContent = text;
+  banner.classList.remove('hidden');
+}
+
+async function viewCliLog(name, { full = false } = {}) {
+  selectedLogName = name;
+  $('log-content-wrap').classList.remove('hidden');
+  $('log-content-name').textContent = name;
+  $('log-content-meta').textContent = 'Loading…';
+  $('log-content').textContent = '';
+  logContentBanner(null);
+  $('log-load-full-btn').classList.add('hidden');
+
+  try {
+    const data = await api(`/cli-logs/${encodeURIComponent(name)}${full ? '?full=true' : ''}`);
+    if (data.unsupported) {
+      $('log-content-meta').textContent = formatSize(data.size);
+      logContentBanner('Preview not available for this file type.');
+      return;
+    }
+
+    $('log-content-meta').textContent = data.totalBytes !== undefined ? formatSize(data.totalBytes) : '';
+    $('log-content').textContent = data.content;
+
+    if (data.multipleEntries) {
+      logContentBanner('This archive contains multiple files — showing their concatenated content.');
+    } else if (data.truncated) {
+      logContentBanner(
+        data.kind === 'text' ? 'Showing the end of the file only.' : 'Content truncated — the archive is larger than the preview limit.'
+      );
+    }
+
+    if (data.kind === 'text' && data.truncated && !full) {
+      $('log-load-full-btn').classList.remove('hidden');
+    }
+  } catch (err) {
+    $('log-content-meta').textContent = '';
+    logContentBanner(`Failed to load: ${err.message}`);
+  }
+}
+
+$('logs-nav-btn').addEventListener('click', () => {
+  switchView('logs');
+  loadCliLogs();
+});
+
+$('refresh-logs-btn').addEventListener('click', () => loadCliLogs());
+
+$('log-load-full-btn').addEventListener('click', () => {
+  if (selectedLogName) viewCliLog(selectedLogName, { full: true });
+});
 
 // ---------- Init ----------
 loadVersion();

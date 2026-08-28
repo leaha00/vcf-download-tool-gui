@@ -1,16 +1,21 @@
 const os = require('os');
+const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const multer = require('multer');
-const { APP_VERSION, DEPOT_DIR } = require('./lib/config');
+const { APP_VERSION, DEPOT_DIR, DOWNLOAD_LOGS_DIR } = require('./lib/config');
 const tokenStore = require('./lib/tokenStore');
 const depotId = require('./lib/depotId');
+const scheduleStore = require('./lib/scheduleStore');
 const { getReleases } = require('./lib/releaseCache');
 const { listBinaries, deleteBinaries } = require('./lib/binaries');
 const depotIndex = require('./lib/depotIndex');
 const { startDownload, getLiveJob } = require('./lib/downloadJobs');
 const jobStore = require('./lib/jobStore');
+const cliLogs = require('./lib/cliLogs');
 const { getCliVersion } = require('./lib/cliVersion');
 const { getDepotStorage } = require('./lib/diskUsage');
+const { getStats } = require('./lib/systemStats');
 const cliInstall = require('./lib/cliInstall');
 const { CliError } = require('./lib/cliRunner');
 
@@ -45,6 +50,10 @@ router.get('/storage', (req, res) => {
   res.json(getDepotStorage() || { totalBytes: 0, usedBytes: 0, freeBytes: 0, usedPercent: 0, unavailable: true });
 });
 
+router.get('/system-stats', (req, res) => {
+  res.json(getStats());
+});
+
 router.get('/cli/status', (req, res) => {
   res.json(cliInstall.getInstallStatus());
 });
@@ -60,6 +69,35 @@ router.post('/cli/install', cliUpload.single('archive'), async (req, res) => {
   } catch (err) {
     const status = err instanceof cliInstall.CliInstallError ? 400 : 500;
     res.status(status).json({ error: err.message });
+  }
+});
+
+router.get('/cli-logs', async (req, res) => {
+  try {
+    res.json(await cliLogs.listLogs());
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to list CLI log directory.' });
+  }
+});
+
+router.get('/cli-logs/*', async (req, res) => {
+  const relativePath = req.params[0] || '';
+  try {
+    res.json(await cliLogs.readLogEntry(relativePath, { full: req.query.full === 'true' }));
+  } catch (err) {
+    if (err instanceof cliLogs.CliLogPathError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    if (err.code === 'ENOENT') {
+      res.status(404).json({ error: 'Log file not found.' });
+      return;
+    }
+    if (err instanceof cliLogs.CliLogReadError) {
+      res.status(502).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: 'Failed to read log file.' });
   }
 });
 
@@ -96,6 +134,23 @@ router.post('/depot-id/generate', async (req, res) => {
 router.post('/depot-id', (req, res) => {
   try {
     res.json(depotId.setExisting(req.body && req.body.id));
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+router.get('/schedule', (req, res) => {
+  res.json({
+    ...scheduleStore.getSchedule(),
+    serverTime: new Date().toISOString(),
+    serverTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
+});
+
+router.post('/schedule', (req, res) => {
+  try {
+    const { enabled, mode, time, days } = req.body || {};
+    res.json(scheduleStore.setSchedule({ enabled, mode, time, days }));
   } catch (err) {
     handleError(res, err);
   }
@@ -169,7 +224,20 @@ router.get('/download/:jobId/stream', (req, res) => {
   });
   res.flushHeaders();
 
-  for (const line of live ? live.lines : []) {
+  let historicalLines = [];
+  if (live) {
+    historicalLines = live.lines;
+  } else {
+    try {
+      historicalLines = fs
+        .readFileSync(path.join(DOWNLOAD_LOGS_DIR, `${jobId}.log`), 'utf8')
+        .split('\n')
+        .filter(Boolean);
+    } catch (err) {
+      historicalLines = []; // no persisted log for this job (predates this feature, or was pruned)
+    }
+  }
+  for (const line of historicalLines) {
     res.write(`data: ${line}\n\n`);
   }
 

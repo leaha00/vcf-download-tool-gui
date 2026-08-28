@@ -116,9 +116,41 @@ async function scanLegacyReleases() {
     }));
 }
 
+// Nests the flat bucket list (9.1.0.x, 9.0.2.x, 9.0.1.x, 9.0.0.x, 5.2.x, ...)
+// one level deeper, grouped by "family" - everything but the bucket's last
+// dot-segment (9.1.0 -> 9.1, 5.0 -> 5). Dynamic (9.x) buckets are
+// major.minor.patch, so their family is major.minor ("9.0.x" containing
+// 9.0.0.x/9.0.1.x/9.0.2.x); legacy buckets are major.minor only, so their
+// family is major ("5.x" containing 5.0.x/5.1.x/5.2.x) - same rule either
+// way, no legacy-specific branching needed. A future release (9.1.1, or a
+// new legacy minor) just lands in the right family automatically since
+// nothing here is hardcoded - it falls out of whatever scanReleases() /
+// scanLegacyReleases() already discovered.
+//
+// Input is already sorted newest-bucket-first; since two buckets only share
+// a family when they agree on every segment but the last, families stay
+// contiguous in that order, so a single left-to-right pass preserves
+// newest-family-first without a second sort.
+function groupIntoFamilies(flatReleases) {
+  const families = [];
+  const byFamily = new Map();
+  for (const group of flatReleases) {
+    const segments = group.bucket.split('.');
+    const family = segments.slice(0, -1).join('.');
+    let entry = byFamily.get(family);
+    if (!entry) {
+      entry = { family, label: `${family}.x`, groups: [] };
+      byFamily.set(family, entry);
+      families.push(entry);
+    }
+    entry.groups.push(group);
+  }
+  return families;
+}
+
 async function scanAllReleases() {
   const [dynamic, legacy] = await Promise.all([scanReleases(), scanLegacyReleases()]);
-  return [...dynamic, ...legacy];
+  return groupIntoFamilies([...dynamic, ...legacy]);
 }
 
 async function getReleases({ forceRefresh = false } = {}) {

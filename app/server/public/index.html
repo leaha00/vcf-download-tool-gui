@@ -36,201 +36,326 @@
       </div>
       <span id="storage-bar-label" class="progress-bar-label"></span>
     </div>
-    <div class="row">
-      <button id="upload-cli-btn" class="btn btn-ghost">Upload CLI</button>
-      <button id="downloads-btn" class="btn btn-ghost">Downloads</button>
-      <button id="settings-btn" class="btn btn-ghost">Settings</button>
-    </div>
   </header>
 
   <main class="layout">
-    <aside class="sidebar">
-      <div class="panel">
-        <h2>Manual version</h2>
-        <div class="row">
-          <input id="manual-version" type="text" placeholder="e.g. 9.1.0.0100" />
-          <button id="manual-load-btn" class="btn">List</button>
+    <nav class="sidebar">
+      <div class="sidebar-nav">
+        <div class="nav-section">
+          <div id="releases-nav-header" class="nav-section-header">
+            <span class="nav-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13 3H6a2 2 0 0 0-2 2v7l9 9a2 2 0 0 0 2.83 0l6.17-6.17a2 2 0 0 0 0-2.83L13 3Z" />
+                <circle cx="8.5" cy="8.5" r="1.4" fill="currentColor" stroke="none" />
+              </svg>
+            </span>
+            <h2>Releases</h2>
+            <button id="refresh-releases-btn" class="btn btn-ghost btn-small" title="Re-scan the depot for new releases">Refresh</button>
+          </div>
+          <div id="releases-meta" class="meta"></div>
+          <div id="releases-list" class="releases-list">
+            <div class="hint">Loading releases…</div>
+          </div>
         </div>
-      </div>
 
-      <div class="panel releases-panel">
-        <div class="panel-header">
-          <h2>Releases</h2>
-          <button id="refresh-releases-btn" class="btn btn-ghost btn-small" title="Re-scan the depot for new releases">Refresh</button>
-        </div>
-        <div id="releases-meta" class="meta"></div>
-        <div id="releases-list" class="releases-list">
-          <div class="hint">Loading releases…</div>
-        </div>
+        <button type="button" id="logs-nav-btn" class="nav-item">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
+              <path d="M14 3v4h4" />
+              <path d="M8.5 12h7M8.5 15.5h7M8.5 8.5h3" />
+            </svg>
+          </span>
+          Logs
+        </button>
+
+        <button type="button" id="downloads-nav-btn" class="nav-item">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v11.5M7.5 10l4.5 4.5L16.5 10" />
+              <path d="M4 16.5v2A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5v-2" />
+            </svg>
+          </span>
+          Downloads
+        </button>
+
+        <button type="button" id="settings-nav-btn" class="nav-item">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="7" />
+              <circle cx="12" cy="12" r="2.8" />
+              <g fill="currentColor" stroke="none">
+                <rect x="10.8" y="1.8" width="2.4" height="3.4" rx="0.6" />
+                <rect x="10.8" y="1.8" width="2.4" height="3.4" rx="0.6" transform="rotate(45 12 12)" />
+                <rect x="10.8" y="1.8" width="2.4" height="3.4" rx="0.6" transform="rotate(90 12 12)" />
+                <rect x="10.8" y="1.8" width="2.4" height="3.4" rx="0.6" transform="rotate(135 12 12)" />
+                <rect x="10.8" y="1.8" width="2.4" height="3.4" rx="0.6" transform="rotate(180 12 12)" />
+                <rect x="10.8" y="1.8" width="2.4" height="3.4" rx="0.6" transform="rotate(225 12 12)" />
+                <rect x="10.8" y="1.8" width="2.4" height="3.4" rx="0.6" transform="rotate(270 12 12)" />
+                <rect x="10.8" y="1.8" width="2.4" height="3.4" rx="0.6" transform="rotate(315 12 12)" />
+              </g>
+            </svg>
+          </span>
+          Settings
+        </button>
       </div>
-    </aside>
+    </nav>
 
     <section class="content">
-      <div class="filters panel">
-        <label>
-          SKU
-          <select id="sku-select">
-            <option value="VCF">VCF</option>
-            <option value="VVF">VVF</option>
-          </select>
-        </label>
-        <label>
-          Type
-          <select id="type-select">
-            <option value="BOTH">Install + Upgrade</option>
-            <option value="INSTALL">Install</option>
-            <option value="UPGRADE">Upgrade</option>
-          </select>
-        </label>
-        <div class="current-version" id="current-version">No version selected</div>
+      <div id="browse-view" class="content-view">
+        <div class="filters panel">
+          <label>
+            SKU
+            <select id="sku-select">
+              <option value="VCF">VCF</option>
+              <option value="VVF">VVF</option>
+            </select>
+          </label>
+          <label>
+            Type
+            <select id="type-select">
+              <option value="BOTH">Install + Upgrade</option>
+              <option value="INSTALL">Install</option>
+              <option value="UPGRADE">Upgrade</option>
+            </select>
+          </label>
+          <div class="current-version" id="current-version">No version selected</div>
+        </div>
+
+        <div class="panel table-panel">
+          <div class="table-toolbar">
+            <input id="search-input" type="text" placeholder="Search full name…" class="search-input" />
+            <label class="select-all-wrap">
+              <input type="checkbox" id="select-all" />
+              Select all
+            </label>
+            <span id="selection-summary" class="meta"></span>
+            <button id="download-btn" class="btn btn-primary" disabled>Download selected</button>
+            <button id="delete-btn" class="btn btn-danger" disabled>Delete selected</button>
+          </div>
+          <div class="table-wrap">
+            <table id="binaries-table">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th id="sort-component_full_name" class="sortable">Full name<span class="sort-indicator"></span></th>
+                  <th>Version</th>
+                  <th>Type</th>
+                  <th id="sort-release_date" class="sortable">Release date<span class="sort-indicator"></span></th>
+                  <th id="sort-size" class="sortable">Size<span class="sort-indicator"></span></th>
+                  <th id="sort-downloaded" class="sortable">Downloaded<span class="sort-indicator"></span></th>
+                </tr>
+              </thead>
+              <tbody id="binaries-tbody">
+                <tr><td colspan="7" class="hint">Pick a version from the left to list its binaries.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
-      <div class="panel table-panel">
-        <div class="table-toolbar">
-          <input id="search-input" type="text" placeholder="Search full name…" class="search-input" />
-          <label class="select-all-wrap">
-            <input type="checkbox" id="select-all" />
-            Select all
-          </label>
-          <span id="selection-summary" class="meta"></span>
-          <button id="download-btn" class="btn btn-primary" disabled>Download selected</button>
-          <button id="delete-btn" class="btn btn-danger" disabled>Delete selected</button>
+      <div id="settings-view" class="content-view view-panel hidden">
+        <h2>Upload CLI</h2>
+        <p class="hint">
+          Broadcom's own CLI, uploaded straight from the tar.gz you already downloaded from
+          their portal — not bundled with this image (it's proprietary, not ours to
+          redistribute). Uploading again replaces the installed copy.
+        </p>
+        <div id="upload-cli-status" class="meta"></div>
+        <input id="upload-cli-input" type="file" accept=".gz,.tar.gz,application/gzip" />
+        <div id="upload-cli-progress-wrap" class="progress-cell hidden" style="margin-top: 0.75rem">
+          <div class="progress-bar">
+            <div id="upload-cli-progress-fill" class="progress-bar-fill"></div>
+          </div>
+          <span id="upload-cli-progress-label" class="progress-bar-label"></span>
         </div>
-        <div class="table-wrap">
-          <table id="binaries-table">
-            <thead>
-              <tr>
-                <th></th>
-                <th id="sort-component_full_name" class="sortable">Full name<span class="sort-indicator"></span></th>
-                <th>Version</th>
-                <th>Type</th>
-                <th id="sort-release_date" class="sortable">Release date<span class="sort-indicator"></span></th>
-                <th id="sort-size" class="sortable">Size<span class="sort-indicator"></span></th>
-                <th id="sort-downloaded" class="sortable">Downloaded<span class="sort-indicator"></span></th>
-              </tr>
-            </thead>
-            <tbody id="binaries-tbody">
-              <tr><td colspan="7" class="hint">Pick a version from the left to list its binaries.</td></tr>
-            </tbody>
-          </table>
+        <div class="modal-actions">
+          <button id="upload-cli-submit-btn" class="btn btn-primary">Upload &amp; install</button>
+        </div>
+
+        <h2 style="margin-top:1.5rem">Software depot ID</h2>
+        <p class="hint">
+          A per-installation ID the activation code below must be registered against on the
+          Broadcom portal. If you've used the CLI elsewhere before, reuse that same ID here —
+          generating a new one won't work with an activation code issued for the old one.
+        </p>
+        <div id="depot-id-status" class="meta"></div>
+        <div class="row">
+          <input id="depot-id-input" type="text" placeholder="e.g. c3d3d097-73cc-4260-abd9-75e528ebbf33" />
+          <button id="depot-id-save-btn" class="btn">Use this ID</button>
+        </div>
+        <div class="modal-actions">
+          <button id="depot-id-generate-btn" class="btn btn-ghost btn-small">Generate a new one instead</button>
+        </div>
+
+        <h2 style="margin-top:1.5rem">Depot activation code</h2>
+        <p class="hint">
+          Stored on a local volume (<code>/data/token</code>), separate from the downloaded binaries.
+          Generate one on the Broadcom download portal, tied to the depot ID above.
+        </p>
+        <div id="token-status" class="meta"></div>
+        <textarea id="token-input" rows="3" placeholder="Paste activation code here"></textarea>
+        <div class="modal-actions">
+          <button id="token-clear-btn" class="btn btn-ghost">Clear</button>
+          <div class="spacer"></div>
+          <button id="token-save-btn" class="btn btn-primary">Save</button>
+        </div>
+
+        <h2 style="margin-top:1.5rem">Scheduled refresh</h2>
+        <p class="hint">
+          Automatically re-scans the depot for new releases on a schedule, so the list is
+          already warm the next time you open the app. Disabled by default. Times use the
+          server's own clock (currently <span id="schedule-server-time">–</span>).
+        </p>
+        <label class="checkbox-row">
+          <input type="checkbox" id="schedule-enabled-input" />
+          Enable scheduled refresh
+        </label>
+        <div class="schedule-row">
+          <label class="color-field">
+            Frequency
+            <select id="schedule-mode-input">
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+            </select>
+          </label>
+          <label class="color-field">
+            Time (24h)
+            <input type="time" id="schedule-time-input" step="60" />
+          </label>
+        </div>
+        <div id="schedule-days-wrap" class="schedule-days hidden">
+          <label class="checkbox-row"><input type="checkbox" value="1" class="schedule-day-input" /> Mon</label>
+          <label class="checkbox-row"><input type="checkbox" value="2" class="schedule-day-input" /> Tue</label>
+          <label class="checkbox-row"><input type="checkbox" value="3" class="schedule-day-input" /> Wed</label>
+          <label class="checkbox-row"><input type="checkbox" value="4" class="schedule-day-input" /> Thu</label>
+          <label class="checkbox-row"><input type="checkbox" value="5" class="schedule-day-input" /> Fri</label>
+          <label class="checkbox-row"><input type="checkbox" value="6" class="schedule-day-input" /> Sat</label>
+          <label class="checkbox-row"><input type="checkbox" value="0" class="schedule-day-input" /> Sun</label>
+        </div>
+        <div id="schedule-status" class="meta"></div>
+        <div class="modal-actions">
+          <button id="schedule-save-btn" class="btn btn-primary">Save schedule</button>
+        </div>
+
+        <h2 style="margin-top:1.5rem">Colors</h2>
+        <p class="hint">Applies immediately and is remembered on this device.</p>
+        <div class="color-fields">
+          <label class="color-field">
+            Background
+            <input id="color-bg-input" type="color" />
+          </label>
+          <label class="color-field">
+            Panel
+            <input id="color-panel-input" type="color" />
+          </label>
+          <label class="color-field">
+            Border
+            <input id="color-border-input" type="color" />
+          </label>
+          <label class="color-field">
+            Text
+            <input id="color-text-input" type="color" />
+          </label>
+          <label class="color-field">
+            Dim text
+            <input id="color-textdim-input" type="color" />
+          </label>
+          <label class="color-field">
+            Accent
+            <input id="color-accent-input" type="color" />
+          </label>
+          <label class="color-field">
+            Danger
+            <input id="color-danger-input" type="color" />
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button id="color-reset-btn" class="btn btn-ghost btn-small">Reset to default</button>
+        </div>
+
+        <h2 style="margin-top:1.5rem">Resource Usage</h2>
+        <p class="hint">This container's own CPU, memory, and disk (depot + data).</p>
+        <div class="resource-usage-grid">
+          <div class="stat-card">
+            <div class="stat-card-header">
+              <h3>CPU</h3>
+              <span id="stat-cpu-detail" class="stat-detail-inline"></span>
+            </div>
+            <div class="stat-bar-row">
+              <span id="stat-cpu-percent" class="stat-percent">–</span>
+              <div class="progress-bar stat-progress-bar"><div id="stat-cpu-fill" class="progress-bar-fill"></div></div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-header">
+              <h3>Memory</h3>
+              <span id="stat-mem-detail" class="stat-detail-inline"></span>
+            </div>
+            <div class="stat-bar-row">
+              <span id="stat-mem-percent" class="stat-percent">–</span>
+              <div class="progress-bar stat-progress-bar"><div id="stat-mem-fill" class="progress-bar-fill"></div></div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-header">
+              <h3 id="stat-disk0-label">Depot</h3>
+              <span id="stat-disk0-detail" class="stat-detail-inline"></span>
+            </div>
+            <div class="stat-bar-row">
+              <span id="stat-disk0-percent" class="stat-percent">–</span>
+              <div class="progress-bar stat-progress-bar"><div id="stat-disk0-fill" class="progress-bar-fill"></div></div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-header">
+              <h3 id="stat-disk1-label">Data</h3>
+              <span id="stat-disk1-detail" class="stat-detail-inline"></span>
+            </div>
+            <div class="stat-bar-row">
+              <span id="stat-disk1-percent" class="stat-percent">–</span>
+              <div class="progress-bar stat-progress-bar"><div id="stat-disk1-fill" class="progress-bar-fill"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="downloads-view" class="content-view view-panel hidden">
+        <h2>Downloads</h2>
+        <p class="hint">Current and past download jobs, newest first.</p>
+        <div id="downloads-list" class="downloads-list">
+          <div class="hint">Loading…</div>
+        </div>
+      </div>
+
+      <div id="logs-view" class="content-view view-panel hidden">
+        <div class="nav-section-header" style="padding:0; margin-bottom: 0.5rem">
+          <h2 style="margin:0">CLI logs</h2>
+          <button id="refresh-logs-btn" class="btn btn-ghost btn-small" title="Re-scan the CLI's log directory">Refresh</button>
+        </div>
+        <p class="hint">The CLI's own log directory (<code>cli/log</code>), including rotated/compressed logs.</p>
+        <div id="logs-list" class="downloads-list">
+          <div class="hint">Loading…</div>
+        </div>
+        <div id="log-content-wrap" class="log-content-wrap hidden">
+          <div class="download-job-header">
+            <span id="log-content-name" class="meta"></span>
+            <span id="log-content-meta" class="meta"></span>
+          </div>
+          <div id="log-content-banner" class="hint hidden"></div>
+          <pre id="log-content" class="log-pre"></pre>
+          <div class="modal-actions">
+            <button id="log-load-full-btn" class="btn btn-ghost btn-small hidden">Load full file</button>
+          </div>
         </div>
       </div>
     </section>
   </main>
 
-  <div id="upload-cli-modal" class="modal hidden">
-    <div class="modal-box">
-      <h2>VCF Download Tool CLI</h2>
-      <p class="hint">
-        Broadcom's own CLI, uploaded straight from the tar.gz you already downloaded from
-        their portal — not bundled with this image (it's proprietary, not ours to
-        redistribute). Uploading again replaces the installed copy.
-      </p>
-      <div id="upload-cli-status" class="meta"></div>
-      <input id="upload-cli-input" type="file" accept=".gz,.tar.gz,application/gzip" />
-      <div id="upload-cli-progress-wrap" class="progress-cell hidden" style="margin-top: 0.75rem">
-        <div class="progress-bar">
-          <div id="upload-cli-progress-fill" class="progress-bar-fill"></div>
-        </div>
-        <span id="upload-cli-progress-label" class="progress-bar-label"></span>
-      </div>
-      <div class="modal-actions">
-        <button id="upload-cli-close-btn" class="btn btn-ghost">Close</button>
-        <button id="upload-cli-submit-btn" class="btn btn-primary">Upload &amp; install</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="settings-modal" class="modal hidden">
-    <div class="modal-box">
-      <h2>Software depot ID</h2>
-      <p class="hint">
-        A per-installation ID the activation code below must be registered against on the
-        Broadcom portal. If you've used the CLI elsewhere before, reuse that same ID here —
-        generating a new one won't work with an activation code issued for the old one.
-      </p>
-      <div id="depot-id-status" class="meta"></div>
-      <div class="row">
-        <input id="depot-id-input" type="text" placeholder="e.g. c3d3d097-73cc-4260-abd9-75e528ebbf33" />
-        <button id="depot-id-save-btn" class="btn">Use this ID</button>
-      </div>
-      <div class="modal-actions">
-        <button id="depot-id-generate-btn" class="btn btn-ghost btn-small">Generate a new one instead</button>
-      </div>
-
-      <h2 style="margin-top:1.5rem">Depot activation code</h2>
-      <p class="hint">
-        Stored on a local volume (<code>/data/token</code>), separate from the downloaded binaries.
-        Generate one on the Broadcom download portal, tied to the depot ID above.
-      </p>
-      <div id="token-status" class="meta"></div>
-      <textarea id="token-input" rows="3" placeholder="Paste activation code here"></textarea>
-      <div class="modal-actions">
-        <button id="token-clear-btn" class="btn btn-ghost">Clear</button>
-        <div class="spacer"></div>
-        <button id="token-save-btn" class="btn btn-primary">Save</button>
-      </div>
-
-      <h2 style="margin-top:1.5rem">Colors</h2>
-      <p class="hint">Applies immediately and is remembered on this device.</p>
-      <div class="color-fields">
-        <label class="color-field">
-          Background
-          <input id="color-bg-input" type="color" />
-        </label>
-        <label class="color-field">
-          Panel
-          <input id="color-panel-input" type="color" />
-        </label>
-        <label class="color-field">
-          Border
-          <input id="color-border-input" type="color" />
-        </label>
-        <label class="color-field">
-          Text
-          <input id="color-text-input" type="color" />
-        </label>
-        <label class="color-field">
-          Dim text
-          <input id="color-textdim-input" type="color" />
-        </label>
-        <label class="color-field">
-          Accent
-          <input id="color-accent-input" type="color" />
-        </label>
-        <label class="color-field">
-          Danger
-          <input id="color-danger-input" type="color" />
-        </label>
-      </div>
-      <div class="modal-actions">
-        <button id="color-reset-btn" class="btn btn-ghost btn-small">Reset to default</button>
-      </div>
-
-      <div class="modal-actions">
-        <div class="spacer"></div>
-        <button id="settings-close-btn" class="btn btn-ghost">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="downloads-modal" class="modal hidden">
-    <div class="modal-box">
-      <h2>Downloads</h2>
-      <p class="hint">Current and past download jobs, newest first.</p>
-      <div id="downloads-list" class="downloads-list">
-        <div class="hint">Loading…</div>
-      </div>
-      <div class="modal-actions">
-        <button id="downloads-close-btn" class="btn btn-primary">Close</button>
-      </div>
-    </div>
-  </div>
-
   <div id="download-modal" class="modal hidden">
     <div class="modal-box">
       <h2>Downloading to depot store</h2>
-      <pre id="download-log"></pre>
+      <pre id="download-log" class="log-pre"></pre>
       <div class="modal-actions">
         <button id="download-close-btn" class="btn btn-primary">Close</button>
       </div>
@@ -240,5 +365,17 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="app.js"></script>
+  <!-- Reports our path to the vcf-lab-toolkit shell when embedded in its
+       iframe, so the shell's own URL bar can reflect where we are inside
+       this app (see that repo's app.js 'message' listener). No-op outside
+       an iframe. -->
+  <script>
+    if (window.parent !== window) {
+      window.parent.postMessage(
+        { source: 'vcf-lab-toolkit-child', path: window.location.pathname + window.location.search },
+        '*'
+      );
+    }
+  </script>
 </body>
 </html>

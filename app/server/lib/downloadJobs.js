@@ -1,6 +1,8 @@
+const path = require('path');
+const fs = require('fs');
 const { EventEmitter } = require('events');
 const { streamCli } = require('./cliRunner');
-const { TOKEN_FILE, DEPOT_DIR } = require('./config');
+const { TOKEN_FILE, DEPOT_DIR, DOWNLOAD_LOGS_DIR } = require('./config');
 const depotIndex = require('./depotIndex');
 const jobStore = require('./jobStore');
 const { parseSize } = require('./sizeUtils');
@@ -27,10 +29,21 @@ function startDownload(ids, binaries) {
   const lines = [];
   liveJobs.set(jobId, { lines, emitter });
 
+  // Persists the raw log alongside the in-memory tail so it survives past
+  // the liveJobs TTL and a container restart - see routes.js's SSE endpoint,
+  // which falls back to reading this file once a job is no longer live.
+  const logStream = fs.createWriteStream(path.join(DOWNLOAD_LOGS_DIR, `${jobId}.log`), { flags: 'a' });
+  logStream.on('error', () => {}); // best-effort - must never take the download down with it
+
   const emit = (line) => {
     lines.push(line);
     if (lines.length > MAX_LINES) lines.shift();
     emitter.emit('line', line);
+    try {
+      logStream.write(`${line}\n`);
+    } catch (err) {
+      // ignore - best-effort persistence only
+    }
   };
 
   // Per-binary progress tracking. A binary/bundle can span several files
@@ -89,16 +102,20 @@ function startDownload(ids, binaries) {
         jobStore.finishJob(jobId, { status: code === 0 ? 'complete' : 'error', exitCode: code });
         emit(code === 0 ? 'Download complete.' : `Download failed (exit code ${code}).`);
         if (code === 0) depotIndex.invalidate();
+        logStream.end();
         emitter.emit('done');
         scheduleCleanup(jobId);
+        pruneOrphanLogs();
       });
     })
     .catch((err) => {
       finalizeBinaryStatuses(jobId, binaries, lines, -1);
       jobStore.finishJob(jobId, { status: 'error', exitCode: -1 });
       emit(`Failed to start download: ${err.message}`);
+      logStream.end();
       emitter.emit('done');
       scheduleCleanup(jobId);
+      pruneOrphanLogs();
     });
 
   return jobId;
@@ -149,6 +166,25 @@ const JOB_TTL_MS = 30 * 60 * 1000;
 function scheduleCleanup(jobId) {
   setTimeout(() => liveJobs.delete(jobId), JOB_TTL_MS).unref();
 }
+
+// Keeps DOWNLOAD_LOGS_DIR bounded to whatever jobStore itself still
+// remembers (MAX_HISTORY finished jobs + any still running) - called after
+// every job finishes, plus once at module load to catch anything orphaned
+// by a restart that happened before this cleanup could run.
+function pruneOrphanLogs() {
+  try {
+    const validIds = new Set(jobStore.listJobs().map((j) => j.id));
+    for (const file of fs.readdirSync(DOWNLOAD_LOGS_DIR)) {
+      if (!file.endsWith('.log')) continue;
+      const id = file.slice(0, -4);
+      if (!validIds.has(id)) fs.unlinkSync(path.join(DOWNLOAD_LOGS_DIR, file));
+    }
+  } catch (err) {
+    // best-effort - a cleanup failure shouldn't disrupt anything else
+  }
+}
+
+pruneOrphanLogs();
 
 // Live log access (for the SSE modal) - falls back to an empty/closed view
 // once a job has aged out of liveJobs, since jobStore still has its status.

@@ -30,7 +30,7 @@ body {
   margin: 0;
   display: flex;
   flex-direction: column;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   background: var(--bg);
   color: var(--text);
 }
@@ -46,9 +46,9 @@ body {
 }
 
 .brand { display: flex; align-items: baseline; gap: 0.5rem; }
-.brand-name { font-size: 1.15rem; font-weight: 600; }
-.brand-version { font-size: 0.8rem; color: var(--text-dim); }
-.brand-cli-version { font-size: 0.8rem; color: var(--text-dim); }
+.brand-name { font-size: 0.92rem; font-weight: 600; }
+.brand-version { font-size: 0.72rem; color: var(--text-dim); }
+.brand-cli-version { font-size: 0.72rem; color: var(--text-dim); }
 .brand-cli-version:not(:empty)::before { content: "\2022"; margin-right: 0.5rem; }
 
 .storage-bar-wrap { display: flex; align-items: center; gap: 0.5rem; }
@@ -56,13 +56,12 @@ body {
 .storage-bar { width: 160px; }
 .progress-bar-fill-warn { background: var(--danger); }
 
-/* A real 2x2 grid (not two independent flex columns) so the top row
-   (Manual version / Filters) always sizes to its tallest cell and the
-   bottom row (Releases / Table) always starts at the same offset and
-   fills the same height - no matter how much either panel's content grows. */
+/* The nav rail (.sidebar) is a single element spanning both rows, so the
+   Releases tree can grow to fill the rail's full height while the content
+   column keeps its own independent Filters/Table row split. */
 .layout {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 240px 1fr;
   grid-template-rows: auto 1fr;
   gap: 1rem;
   padding: 1rem;
@@ -70,29 +69,136 @@ body {
   min-height: 0;
 }
 
-.sidebar, .content { display: contents; }
+.content { display: contents; }
 
-.sidebar > .panel:first-child { grid-column: 1; grid-row: 1; }
+/* No overflow-y here on purpose - .releases-list below is the only
+   scrolling region, so Downloads/Settings always stay pinned as the rail's
+   effective bottom instead of scrolling away with a long release tree. */
+.sidebar {
+  grid-column: 1;
+  grid-row: 1 / 3;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
 .filters.panel { grid-column: 2; grid-row: 1; }
-.releases-panel { grid-column: 1; grid-row: 2; }
 .table-panel { grid-column: 2; grid-row: 2; }
 
-.releases-panel, .table-panel {
+.table-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
+/* Downloads/Settings render as full-height panes in the content column
+   instead of the browse pane (filters+table) - only one content-view is
+   visible at a time. #browse-view stays `display: contents` so its own
+   children (.filters.panel/.table-panel) keep their individual grid
+   placement above; the other views are single grid items spanning both
+   rows, like .sidebar does in column 1. */
+#browse-view { display: contents; }
+#browse-view.hidden { display: none; }
+
+.view-panel {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+}
+.view-panel.hidden { display: none; }
+.view-panel h2:first-child { margin-top: 0; }
+.view-panel textarea { flex-shrink: 0; }
+
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; grid-template-rows: none; flex: none; }
-  .sidebar > .panel:first-child, .filters.panel, .releases-panel, .table-panel {
+  .sidebar, .filters.panel, .table-panel, .view-panel {
     grid-column: auto;
     grid-row: auto;
   }
-  .releases-panel, .table-panel { display: block; }
-  .releases-list { flex: none !important; max-height: 55vh; }
+  .sidebar { max-height: 55vh; }
+  .table-panel { display: block; }
+  .releases-list { flex: none !important; max-height: 40vh; }
   .table-wrap { flex: none !important; }
 }
+
+/* ---------- Nav rail (Releases / Downloads / Settings) ---------- */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 2px;
+  padding: 0.5rem 0;
+}
+
+.nav-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  padding: 0 0.25rem;
+}
+
+.nav-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.85rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.nav-section-header h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.6rem 1.1rem;
+  border: none;
+  border-left: 3px solid transparent;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-item:hover { background: var(--accent-dim); color: var(--text); }
+.nav-item.active {
+  border-left-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+.nav-icon {
+  display: inline-flex;
+  width: 1.1rem;
+  height: 1.1rem;
+  flex: none;
+  color: inherit;
+}
+.nav-icon svg { width: 100%; height: 100%; }
 
 .panel {
   background: var(--panel);
@@ -100,17 +206,6 @@ body {
   border-radius: var(--radius);
   padding: 1rem;
 }
-
-.panel h2 {
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-dim);
-  margin: 0 0 0.75rem;
-}
-
-.panel-header { display: flex; align-items: center; justify-content: space-between; }
-.panel-header h2 { margin: 0; }
 
 .row { display: flex; gap: 0.5rem; }
 .row input { flex: 1; }
@@ -148,25 +243,48 @@ textarea { width: 100%; resize: vertical; }
 .meta { font-size: 0.78rem; color: var(--text-dim); margin: 0.25rem 0; overflow-wrap: break-word; }
 .hint { color: var(--text-dim); font-size: 0.85rem; padding: 0.5rem 0; }
 
-.releases-list { flex: 1; min-height: 0; overflow-y: auto; }
+#releases-meta { padding: 0 0.85rem; }
+.releases-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 0.25rem 0.5rem; }
 
-.release-group { border-bottom: 1px solid var(--border); }
-.release-group:last-child { border-bottom: none; }
+/* Three levels: family (9.0.x / 5.x) > bucket group (9.0.1.x) > version leaf
+   (9.0.1.0100) - except the legacy 5.x line, which only ever has a bucket
+   with a single version equal to itself, so app.js renders that bucket as a
+   leaf directly under the family instead (see renderBucketGroup). */
+.release-family { border-bottom: 1px solid var(--border); }
+.release-family:last-child { border-bottom: none; }
+
+.release-family-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.6rem;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.release-family-header .caret { color: var(--text-dim); transition: transform 0.15s; }
+.release-family.open > .release-family-header .caret { transform: rotate(90deg); }
+
+.release-family-groups { display: none; padding-bottom: 0.25rem; }
+.release-family.open > .release-family-groups { display: block; }
+
+.release-group { padding-left: 0.6rem; }
 
 .release-group-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.5rem 0.25rem;
+  padding: 0.4rem 0.6rem;
   cursor: pointer;
-  font-weight: 600;
-  font-size: 0.9rem;
+  font-weight: 500;
+  font-size: 0.82rem;
 }
 
 .release-group-header .caret { color: var(--text-dim); transition: transform 0.15s; }
 .release-group.open .caret { transform: rotate(90deg); }
 
-.release-versions { display: none; padding-bottom: 0.5rem; }
+.release-versions { display: none; padding-bottom: 0.35rem; }
 .release-group.open .release-versions { display: block; }
 
 .release-version-item {
@@ -177,6 +295,10 @@ textarea { width: 100%; resize: vertical; }
   cursor: pointer;
   font-size: 0.85rem;
 }
+
+/* Nested one level deeper when it's a build under a bucket group, rather
+   than a bare legacy version sitting directly under its family. */
+.release-versions .release-version-item { padding-left: 1.75rem; font-size: 0.82rem; }
 
 .release-version-item:hover { background: var(--accent-dim); }
 .release-version-item.active { background: var(--accent); color: #fff; }
@@ -218,6 +340,11 @@ td:nth-child(2) { white-space: normal; min-width: 200px; }
 
 .search-input { width: 220px; }
 
+.checkbox-row { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; cursor: pointer; }
+.schedule-row { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
+.schedule-days { display: flex; gap: 0.9rem; flex-wrap: wrap; margin-top: 0.6rem; }
+.schedule-days.hidden { display: none; }
+
 .color-fields { display: flex; flex-wrap: wrap; gap: 1rem 1.5rem; }
 .color-field { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.78rem; color: var(--text-dim); }
 .color-field input[type="color"] {
@@ -226,6 +353,20 @@ td:nth-child(2) { white-space: normal; min-width: 200px; }
   padding: 0.15rem;
   cursor: pointer;
 }
+
+.resource-usage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+@media (max-width: 480px) { .resource-usage-grid { grid-template-columns: 1fr; } }
+
+.stat-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.7rem 0.85rem; }
+.stat-card-wide { grid-column: 1 / -1; }
+.stat-card-header { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.4rem; }
+.stat-card h3 { margin: 0; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); }
+.stat-detail-inline { font-size: 0.72rem; color: var(--text-dim); }
+.stat-bar-row { display: flex; align-items: center; gap: 0.6rem; }
+.stat-percent { font-size: 0.95rem; font-weight: 600; min-width: 2.8rem; text-align: right; }
+/* Compound selector, not just .stat-progress-bar, so this always wins over
+   the base .progress-bar rule regardless of stylesheet order. */
+.stat-bar-row .progress-bar.stat-progress-bar { width: 100%; height: 0.4rem; }
 
 .progress-cell { display: flex; align-items: center; gap: 0.5rem; }
 .progress-cell.hidden { display: none; }
@@ -302,11 +443,13 @@ td:nth-child(2) { white-space: normal; min-width: 200px; }
   overflow-y: auto;
 }
 
+.modal-box-wide { width: min(720px, 95vw); }
+
 .modal-box h2 { margin-top: 0; }
 .modal-actions { display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; }
 .spacer { flex: 1; }
 
-#download-log {
+.log-pre {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -316,6 +459,10 @@ td:nth-child(2) { white-space: normal; min-width: 200px; }
   font-size: 0.78rem;
   white-space: pre-wrap;
 }
+
+.log-content-wrap { margin-top: 1rem; }
+.log-content-wrap.hidden { display: none; }
+.log-content-wrap .log-pre { max-height: 50vh; }
 
 .toast {
   position: fixed;
