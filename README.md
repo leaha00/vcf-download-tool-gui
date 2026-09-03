@@ -9,14 +9,20 @@ The following versions of the CLI were tested and work
 
 - 9.1.0.0100
 - 9.1.0.0400
-- 9.1.1.0 — needs more JVM heap than the older ones (see below)
+- 9.1.1.0 — needs more JVM heap, and changed release discovery (see below)
 
-The CLI ships its own JRE and sets no `-Xmx`, so the JVM caps its heap at a
-fraction of the container's `mem_limit`. Older CLIs cope with the default;
-9.1.1.0 runs out of heap partway through a download
+**Heap:** the CLI ships its own JRE and sets no `-Xmx`, so the JVM caps its
+heap at a fraction of the container's `mem_limit`. Older CLIs cope with the
+default; 9.1.1.0 runs out of heap partway through a download
 (`java.lang.OutOfMemoryError: Java heap space`) unless given more. The
 compose file sets `CLI_JAVA_TOOL_OPTIONS=-Xmx768m` for this. If a newer CLI
 still OOMs, raise that value and `mem_limit` together.
+
+**Release discovery:** 9.1.1.0 changed `binaries list` so a `--vcf-version`
+range no longer enumerates past releases. On CLI ≥ 9.1.1 the app uses the
+new `releases list` command instead (release lines only — individual patch
+builds like `9.1.0.0200` are no longer separately listable); on older CLIs
+the previous scan is used unchanged.
 
 # Features
 

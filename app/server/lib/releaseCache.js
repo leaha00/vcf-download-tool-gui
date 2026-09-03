@@ -1,5 +1,6 @@
 const { runCli } = require('./cliRunner');
 const { parseTable } = require('./tableParser');
+const { getCliVersion } = require('./cliVersion');
 const {
   TOKEN_FILE,
   RELEASE_SCAN_START,
@@ -148,7 +149,73 @@ function groupIntoFamilies(flatReleases) {
   return families;
 }
 
+// --- CLI >= 9.1.1: `releases list` ----------------------------------------
+//
+// 9.1.1.0 changed `binaries list` so any --vcf-version range (9.0..) now
+// collapses to the newest build per component - verified against the CLI -
+// which left the anchor scan above only ever able to see the latest release
+// line. The same CLI added a top-level `releases list` subcommand that
+// prints every VCF release line (a.b.c.d, always d=0), newest first, from
+// 5.0 onward. Older CLIs (9.1.0.x) don't have it, but the anchor scan still
+// works for them, so the path is chosen by installed CLI version - with a
+// fallback to the anchor scan if `releases list` fails for any reason.
+//
+// Only release *lines* are available this way, not individual patch builds
+// (9.1.0.0100/0200/...) - the new CLI won't list those for INSTALL under
+// any flag combination anyway.
+const RELEASES_LIST_MIN_CLI = '9.1.1';
+const RELEASE_FLOOR = '5.0.0.0'; // `releases list` also emits 4.x; the GUI has only ever covered 5.0+
+
+async function scanViaReleasesList() {
+  const { stdout } = await runCli([
+    'releases',
+    'list',
+    `--depot-download-activation-code-file=${TOKEN_FILE}`,
+  ]);
+
+  const versions = stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^\d+\.\d+\.\d+\.\d+$/.test(l)) // the CLI banner/status lines don't match
+    .filter((v) => compareVersions(v, RELEASE_FLOOR) >= 0)
+    .sort((a, b) => compareVersions(b, a)); // newest first, don't trust CLI ordering
+
+  if (versions.length === 0) {
+    throw new Error('`releases list` returned no recognisable versions');
+  }
+
+  // Normalise each release line into the {bucket,label,versions} shape the
+  // anchor/legacy scans produce so groupIntoFamilies + the renderer work
+  // unchanged: 9.x -> bucket a.b.c (family a.b), pre-9.0 -> bucket a.b
+  // (family a), matching the old hardcoded 5.x behaviour. One leaf per
+  // bucket, keyed to the bucket itself so it renders as a plain leaf.
+  const seen = new Set();
+  const groups = [];
+  for (const v of versions) {
+    const is9x = compareVersions(v, '9.0.0.0') >= 0;
+    const bucket = v.split('.').slice(0, is9x ? 3 : 2).join('.');
+    if (seen.has(bucket)) continue;
+    seen.add(bucket);
+    groups.push({
+      bucket,
+      label: `${bucket}.x`,
+      versions: [{ vcfVersion: bucket, bucket, releaseDate: null }],
+    });
+  }
+
+  return groupIntoFamilies(groups);
+}
+
 async function scanAllReleases() {
+  const cliVersion = await getCliVersion();
+  if (cliVersion && compareVersions(cliVersion, RELEASES_LIST_MIN_CLI) >= 0) {
+    try {
+      return await scanViaReleasesList();
+    } catch (err) {
+      // fall through to the anchor scan
+    }
+  }
+
   const [dynamic, legacy] = await Promise.all([scanReleases(), scanLegacyReleases()]);
   return groupIntoFamilies([...dynamic, ...legacy]);
 }
