@@ -13,6 +13,11 @@ services:
       INTERNAL_PORT: "10080"
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
+      # Heap for the bundled-JRE CLI. It sets no -Xmx of its own, so without
+      # this the JVM caps its heap at ~25% of mem_limit (~256 MB at 1g),
+      # which CLI 9.1.1.0+ runs out of mid-download. Raise both this and
+      # mem_limit together if a newer CLI still OOMs.
+      CLI_JAVA_TOOL_OPTIONS: "${CLI_JAVA_TOOL_OPTIONS:--Xmx768m}"
     networks:
       - vcf-shared
     mem_limit: 1g

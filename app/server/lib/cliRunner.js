@@ -4,7 +4,23 @@ const os = require('os');
 const path = require('path');
 const { CLI_BIN, TOKEN_FILE, XDG_DATA_HOME } = require('./config');
 
-const cliEnv = { ...process.env, XDG_DATA_HOME };
+// The CLI bundles its own JRE and sets no explicit -Xmx, so the JVM caps
+// its max heap at ~25% of the container's cgroup memory limit. At the
+// default mem_limit: 1g that's only ~256 MB, and CLI 9.1.1.0+ needs more
+// than that to process the "unified compatibility data" step - it dies
+// with `java.lang.OutOfMemoryError: Java heap space` partway through a
+// download. JAVA_TOOL_OPTIONS is read by the JVM directly regardless of
+// Broadcom's launcher script (the JVM echoes "Picked up JAVA_TOOL_OPTIONS:
+// ..." to stderr, which shows up in the download log). Scoped to CLI
+// spawns only - it never reaches Node or anything else. Override per
+// deployment with CLI_JAVA_TOOL_OPTIONS (e.g. a larger -Xmx if you've
+// raised mem_limit).
+const CLI_JAVA_TOOL_OPTIONS = process.env.CLI_JAVA_TOOL_OPTIONS || '-Xmx768m';
+const cliEnv = {
+  ...process.env,
+  XDG_DATA_HOME,
+  JAVA_TOOL_OPTIONS: CLI_JAVA_TOOL_OPTIONS,
+};
 
 function scratchDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vdt-run-'));
