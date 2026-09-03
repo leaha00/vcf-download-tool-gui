@@ -409,6 +409,17 @@ td:nth-child(2) { white-space: normal; min-width: 200px; }
 
 .download-job-binaries { font-size: 0.85rem; }
 
+.job-binary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.2rem 0;
+}
+
+.job-binary-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-binary-status { flex: none; }
+
 .job-status-badge {
   font-size: 0.72rem;
   text-transform: uppercase;

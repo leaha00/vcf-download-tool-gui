@@ -8,8 +8,9 @@ const router = express.Router();
 // Same depot-store stats the public GUI's own topbar shows, mirrored here
 // so vcf-web-depot (which has no filesystem access of its own) can render
 // the same storage bar.
-router.get('/storage', (req, res) => {
-  res.json(getDepotStorage() || { totalBytes: 0, usedBytes: 0, freeBytes: 0, usedPercent: 0, unavailable: true });
+router.get('/storage', async (req, res) => {
+  const storage = await getDepotStorage();
+  res.json(storage || { totalBytes: 0, usedBytes: 0, freeBytes: 0, usedPercent: 0, unavailable: true });
 });
 
 // Recursive total size of one directory - see depotServe.getDirSize for why

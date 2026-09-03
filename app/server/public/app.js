@@ -9,7 +9,14 @@ const state = {
   searchQuery: '',
   jobs: [],
   liveStatusByBinaryId: {},
+  binariesLoading: false,
+  binariesError: null,
+  loadSeq: 0,
 };
+
+function anyJobRunning() {
+  return state.jobs.some((j) => j.status === 'running');
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -487,9 +494,12 @@ $('search-input').addEventListener('input', (e) => {
 });
 
 async function loadBinaries() {
-  const tbody = $('binaries-tbody');
-  tbody.innerHTML = '<tr><td colspan="7" class="hint">Loading…</td></tr>';
+  const mySeq = ++state.loadSeq;
+  state.binariesLoading = true;
+  state.binariesError = null;
+  state.binaries = [];
   state.selectedIds.clear();
+  renderBinaries();
   updateSelectionUi();
 
   try {
@@ -499,19 +509,53 @@ async function loadBinaries() {
       type: $('type-select').value,
     });
     const data = await api(`/binaries?${params}`);
+    if (mySeq !== state.loadSeq) return; // a newer load started while this was in flight
     state.binaries = data.binaries;
     applySort();
-    renderBinaries();
     if (data.fellBackToFamily) {
       toast(`No binaries pinned to exactly ${state.selectedVersion}; showing the full ${data.queriedVersion}.x family instead.`);
     }
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="7" class="hint">${escapeHtml(err.message)}</td></tr>`;
+    if (mySeq !== state.loadSeq) return;
+    state.binariesError = err.message;
+  } finally {
+    if (mySeq === state.loadSeq) {
+      state.binariesLoading = false;
+      renderBinaries();
+    }
   }
+}
+
+function renderBinariesPlaceholder(text) {
+  $('binaries-tbody').innerHTML = `<tr><td colspan="7" class="hint">${escapeHtml(text)}</td></tr>`;
+  state.visibleBinaries = [];
+  updateSelectionUi();
 }
 
 function renderBinaries() {
   const tbody = $('binaries-tbody');
+
+  // The job poll calls this every few seconds while a download runs. Never
+  // let it overwrite an in-flight load with a misleading "nothing here" -
+  // a `binaries list` queues behind a running download on the single CLI
+  // lock (see server cliRunner.js), so the request is still coming.
+  if (state.binariesLoading) {
+    renderBinariesPlaceholder(
+      anyJobRunning()
+        ? 'Waiting for the current download to finish before this release can be listed…'
+        : 'Loading…'
+    );
+    return;
+  }
+  if (state.binariesError) {
+    renderBinariesPlaceholder(state.binariesError);
+    return;
+  }
+  if (!state.selectedVersion) {
+    renderBinariesPlaceholder('Pick a version from the left to list its binaries.');
+    return;
+  }
+
   tbody.innerHTML = '';
 
   if (state.binaries.length === 0) {
@@ -702,9 +746,35 @@ function updateLiveStatusMap() {
   state.liveStatusByBinaryId = map;
 }
 
-function jobSummaryLabel(job) {
-  const names = job.binaries.map((b) => b.fullName || b.component).join(', ');
-  return job.binaries.length === 1 ? names : `${job.binaries.length} binaries (${names})`;
+function jobBinaryStatusHtml(b) {
+  const percent = Math.max(0, Math.min(100, b.percent || 0));
+  switch (b.status) {
+    case 'downloading':
+      return `<div class="progress-cell"><div class="progress-bar"><div class="progress-bar-fill" style="width:${percent}%"></div></div><span class="progress-bar-label">${percent}%</span></div>`;
+    case 'done':
+      return '<span class="downloaded-badge">✓ Downloaded</span>';
+    case 'failed':
+      return '<span class="failed-badge">Failed</span>';
+    case 'cancelled':
+      return '<span class="failed-badge">Cancelled</span>';
+    default:
+      return '<span class="pending-badge">Pending</span>';
+  }
+}
+
+// Per-binary breakdown, so a running job's progress is visible here without
+// having to open the release table (which can't be listed at all while the
+// download holds the CLI lock).
+function renderJobBinaries(job) {
+  return (job.binaries || [])
+    .map(
+      (b) => `
+      <div class="job-binary-row">
+        <span class="job-binary-name">${escapeHtml(b.fullName || b.component)}${b.version ? ` <span class="meta">${escapeHtml(b.version)}</span>` : ''}</span>
+        <span class="job-binary-status">${jobBinaryStatusHtml(b)}</span>
+      </div>`
+    )
+    .join('');
 }
 
 function renderDownloadsList() {
@@ -725,7 +795,7 @@ function renderDownloadsList() {
         <span class="job-status-badge job-status-${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
         <span class="meta">${escapeHtml(started)}${finished ? ` — ${escapeHtml(finished)}` : ''}</span>
       </div>
-      <div class="download-job-binaries">${escapeHtml(jobSummaryLabel(job))}</div>
+      <div class="download-job-binaries">${renderJobBinaries(job)}</div>
     `;
     const viewBtn = document.createElement('button');
     viewBtn.className = 'btn btn-ghost btn-small';
@@ -766,18 +836,36 @@ $('download-btn').addEventListener('click', async () => {
 });
 
 $('delete-btn').addEventListener('click', async () => {
-  const ids = state.binaries.filter((b) => state.selectedIds.has(b.id) && b.downloaded).map((b) => b.id);
-  if (ids.length === 0) return;
+  const toDelete = state.binaries.filter((b) => state.selectedIds.has(b.id) && b.downloaded);
+  if (toDelete.length === 0) return;
 
   const confirmed = window.confirm(
-    `Delete ${ids.length} downloaded binar${ids.length === 1 ? 'y' : 'ies'} from the depot store? This removes the files on disk and can't be undone.`
+    `Delete ${toDelete.length} downloaded binar${toDelete.length === 1 ? 'y' : 'ies'} from the depot store? This removes the files on disk and can't be undone.`
   );
   if (!confirmed) return;
 
   try {
-    await api('/delete', { method: 'POST', body: JSON.stringify({ ids }) });
-    toast(`Deleted ${ids.length} binar${ids.length === 1 ? 'y' : 'ies'} from the depot store.`);
-    await loadBinaries();
+    const result = await api('/delete', {
+      method: 'POST',
+      body: JSON.stringify({
+        binaries: toDelete.map((b) => ({ component: b.component, version: b.version, type: b.type })),
+      }),
+    });
+    // Update in place rather than re-running loadBinaries(): a fresh
+    // `binaries list` would queue behind any in-progress download on the
+    // CLI lock, and the server has already invalidated its depot index.
+    for (const b of toDelete) b.downloaded = false;
+    state.selectedIds.clear();
+    applySort();
+    renderBinaries();
+    updateSelectionUi();
+
+    const fileCount = (result.removed || []).length;
+    toast(
+      fileCount > 0
+        ? `Deleted ${fileCount} file${fileCount === 1 ? '' : 's'} from the depot store.`
+        : 'Nothing left on disk for the selected binaries.'
+    );
   } catch (err) {
     toast(err.message, true);
   }

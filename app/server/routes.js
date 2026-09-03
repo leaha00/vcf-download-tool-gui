@@ -46,12 +46,13 @@ router.get('/cli-version', async (req, res) => {
   res.json({ cliVersion: await getCliVersion() });
 });
 
-router.get('/storage', (req, res) => {
-  res.json(getDepotStorage() || { totalBytes: 0, usedBytes: 0, freeBytes: 0, usedPercent: 0, unavailable: true });
+router.get('/storage', async (req, res) => {
+  const storage = await getDepotStorage();
+  res.json(storage || { totalBytes: 0, usedBytes: 0, freeBytes: 0, usedPercent: 0, unavailable: true });
 });
 
-router.get('/system-stats', (req, res) => {
-  res.json(getStats());
+router.get('/system-stats', async (req, res) => {
+  res.json(await getStats());
 });
 
 router.get('/cli/status', (req, res) => {
@@ -183,10 +184,10 @@ router.get('/binaries', async (req, res) => {
 
 router.post('/delete', async (req, res) => {
   try {
-    const ids = req.body && req.body.ids;
-    await deleteBinaries(ids);
+    const binaries = (req.body && req.body.binaries) || [];
+    const result = await deleteBinaries(binaries);
     depotIndex.invalidate();
-    res.json({ ok: true });
+    res.json({ ok: true, ...result });
   } catch (err) {
     handleError(res, err);
   }

@@ -105,12 +105,30 @@ function isExcludedFor(component, type, filename) {
   return false;
 }
 
+// A bare `filename.includes(vcfVersion)` substring test is too loose: the
+// GA string "9.1.0.0" is a substring of every "9.1.0.0100"/"0200"/... patch
+// filename, so a GA row would look downloaded whenever any patch of that
+// family was on disk (and, worse, a fs-based delete of the GA would match
+// the patch files). Require the version to be followed by a real separator
+// - "." before the trailing build id, or "-"/"_" - so "9.1.0.0" matches
+// "...-9.1.0.0.25346025.ova" but not "...-9.1.0.0400.25541550.pak".
+function matchesVersion(filename, vcfVersion) {
+  let from = 0;
+  for (;;) {
+    const i = filename.indexOf(vcfVersion, from);
+    if (i === -1) return false;
+    const next = filename[i + vcfVersion.length];
+    if (next === '.' || next === '-' || next === '_' || next === undefined) return true;
+    from = i + 1;
+  }
+}
+
 function isDownloaded(index, component, version, type) {
   if (!version) return false;
   const files = index.byComponent.get(component);
   if (!files || files.length === 0) return false;
   const vcfVersion = version.split('.').slice(0, 4).join('.');
-  const candidates = files.filter((f) => f.includes(vcfVersion));
+  const candidates = files.filter((f) => matchesVersion(f, vcfVersion));
   return candidates.some((f) => !isExcludedFor(component, type, f));
 }
 
@@ -118,4 +136,4 @@ function invalidate() {
   cache = null;
 }
 
-module.exports = { getIndex, isDownloaded, invalidate };
+module.exports = { getIndex, isDownloaded, invalidate, matchesVersion, isExcludedFor, COMP_ROOT };

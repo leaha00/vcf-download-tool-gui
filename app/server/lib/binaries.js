@@ -1,6 +1,9 @@
+const path = require('path');
+const fsp = require('fs/promises');
 const { runCli } = require('./cliRunner');
 const { parseTable } = require('./tableParser');
-const { TOKEN_FILE, DEPOT_DIR } = require('./config');
+const { matchesVersion, isExcludedFor, COMP_ROOT } = require('./depotIndex');
+const { TOKEN_FILE } = require('./config');
 
 async function queryVersion(version, sku, types) {
   const results = await Promise.all(
@@ -51,17 +54,58 @@ async function listBinaries({ version, sku = 'VCF', type = 'BOTH' }) {
   return { binaries: [], queriedVersion: version, fellBackToFamily: false };
 }
 
-// `cleanup` only touches local disk under --depot-store - no depot auth
-// needed, unlike list/download.
-async function deleteBinaries(ids) {
-  if (!Array.isArray(ids) || ids.length === 0) {
-    throw new Error('At least one binary id is required');
+// Deleting downloaded binaries is pure local-disk work - the CLI's own
+// `binaries cleanup` needs no depot auth for it either (its own help says
+// so). Doing it with `fs` instead of spawning the CLI keeps it off the
+// single global CLI lock (see cliRunner.js), so "free up space" still works
+// while a large download is in progress - which is exactly when you need it.
+//
+// Files are matched the same way depotIndex.isDownloaded decides a binary
+// shows as downloaded: top-level artifacts in <depot>/PROD/COMP/<COMPONENT>/
+// whose name carries the 4-part vcf-version (boundary-checked - see
+// matchesVersion) and isn't excluded for the row's INSTALL/UPGRADE type. So
+// a delete flips exactly the rows the UI marked "downloaded" back to not,
+// and nothing else. Deliberately flat, not recursive: some components nest
+// an internal per-build RPM mirror many levels down whose sub-packages
+// carry unrelated version numbers (the reason depotIndex's scan is flat
+// too) - recursing risks deleting a file that belongs to a different build.
+async function deleteBinaries(binaries) {
+  if (!Array.isArray(binaries) || binaries.length === 0) {
+    throw new Error('At least one binary is required');
   }
-  const { stdout } = await runCli(
-    ['binaries', 'cleanup', `--id=${ids.join(',')}`, `--depot-store=${DEPOT_DIR}`],
-    { requireToken: false }
-  );
-  return stdout;
+
+  const removed = [];
+  const errors = [];
+
+  for (const b of binaries) {
+    if (!b || !b.component || !b.version) continue;
+    const compDir = path.join(COMP_ROOT, b.component);
+
+    let entries;
+    try {
+      entries = await fsp.readdir(compDir, { withFileTypes: true });
+    } catch (err) {
+      continue; // component dir gone already - nothing on disk to remove
+    }
+
+    const vcfVersion = String(b.version).split('.').slice(0, 4).join('.');
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!matchesVersion(entry.name, vcfVersion)) continue;
+      if (isExcludedFor(b.component, b.type, entry.name)) continue;
+
+      const filePath = path.join(compDir, entry.name);
+      try {
+        const { size } = await fsp.stat(filePath);
+        await fsp.unlink(filePath);
+        removed.push({ component: b.component, file: entry.name, bytes: size });
+      } catch (err) {
+        if (err.code !== 'ENOENT') errors.push({ file: entry.name, error: err.message });
+      }
+    }
+  }
+
+  return { removed, errors };
 }
 
 module.exports = { listBinaries, deleteBinaries };

@@ -1,6 +1,6 @@
-const fs = require('fs');
 const os = require('os');
-const { getDepotStorage } = require('./diskUsage');
+const fs = require('fs');
+const { getDepotStorage, statfs } = require('./diskUsage');
 const { TOKEN_DIR } = require('./config');
 
 const V2_ROOT = '/sys/fs/cgroup';
@@ -125,18 +125,22 @@ function readCpu() {
 }
 
 // Reuses the existing depot-storage cache/statfs logic rather than
-// duplicating it.
-function readDepotDisk() {
-  const depot = getDepotStorage();
+// duplicating it. Async and non-blocking - see diskUsage.js for why the
+// depot mount must never be stat'd synchronously.
+async function readDepotDisk() {
+  const depot = await getDepotStorage();
   if (!depot) return null;
   return { ...depot, label: 'Depot' };
 }
 
 // TOKEN_DIR also holds the uploaded CLI binary and job history once in use
-// (see lib/config.js) - shown as "Data" alongside the depot mount.
-function readTokenDirDisk() {
+// (see lib/config.js) - shown as "Data" alongside the depot mount. Local
+// volume rather than NFS, so a stall is unlikely, but the same timeout-
+// capped async statfs is used so a wedged data volume can't freeze the
+// event loop either.
+async function readTokenDirDisk() {
   try {
-    const s = fs.statfsSync(TOKEN_DIR);
+    const s = await statfs(TOKEN_DIR);
     const totalBytes = s.blocks * s.bsize;
     const freeBytes = s.bavail * s.bsize;
     const usedBytes = totalBytes - s.bfree * s.bsize;
@@ -149,11 +153,14 @@ function readTokenDirDisk() {
   }
 }
 
-function getStats() {
+async function getStats() {
+  // cgroup reads are in-kernel pseudo-files (effectively instant); only the
+  // two disk cards touch statfs, so those are the only async part.
+  const [depotDisk, tokenDisk] = await Promise.all([readDepotDisk(), readTokenDirDisk()]);
   return {
     cpu: readCpu(),
     memory: readMemory(),
-    disk: [readDepotDisk(), readTokenDirDisk()].filter(Boolean),
+    disk: [depotDisk, tokenDisk].filter(Boolean),
   };
 }
 
