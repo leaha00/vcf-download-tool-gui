@@ -35,4 +35,28 @@ function invalidate() {
   cache = null;
 }
 
-module.exports = { getCliVersion, invalidate };
+function versionKey(v) {
+  return String(v)
+    .split('.')
+    .map((n) => parseInt(n, 10) || 0);
+}
+
+function compareVersions(a, b) {
+  const ka = versionKey(a);
+  const kb = versionKey(b);
+  for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
+    const diff = (ka[i] || 0) - (kb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+// True when the installed CLI is at least `version`. An undetectable CLI
+// (not installed, broken, --version unparseable) returns false - callers
+// gate newer-CLI behaviour on this, so "unknown" means "assume old".
+async function cliAtLeast(version) {
+  const current = await getCliVersion();
+  return !!current && compareVersions(current, version) >= 0;
+}
+
+module.exports = { getCliVersion, invalidate, cliAtLeast, compareVersions };

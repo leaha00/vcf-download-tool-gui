@@ -2,10 +2,22 @@ const path = require('path');
 const fsp = require('fs/promises');
 const { runCli } = require('./cliRunner');
 const { parseTable } = require('./tableParser');
+const { cliAtLeast } = require('./cliVersion');
 const { matchesVersion, isExcludedFor, COMP_ROOT } = require('./depotIndex');
 const { TOKEN_FILE } = require('./config');
 
+// CLI >= 9.1.1 defaults `binaries list` to latest=true - one row per
+// component at its newest build within the queried line - so browsing e.g.
+// 9.1.0 shows only 9.1.0.0400 of each component, not the 9.1.0.0/0100/0200
+// builds. `--latest=false` restores the full per-build listing (verified:
+// 24 -> 74 rows for 9.1.0 INSTALL). Older CLIs (9.1.0.x) already list every
+// build by default and may not accept the flag, so it's version-gated.
+async function latestFalseArgs() {
+  return (await cliAtLeast('9.1.1')) ? ['--latest=false'] : [];
+}
+
 async function queryVersion(version, sku, types) {
+  const extra = await latestFalseArgs();
   const results = await Promise.all(
     types.map((t) =>
       runCli([
@@ -15,6 +27,7 @@ async function queryVersion(version, sku, types) {
         `--vcf-version=${version}`,
         `--sku=${sku}`,
         `--type=${t}`,
+        ...extra,
       ]).then((r) => parseTable(r.stdout))
     )
   );

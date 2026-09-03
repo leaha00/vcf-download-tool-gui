@@ -18,11 +18,13 @@ default; 9.1.1.0 runs out of heap partway through a download
 compose file sets `CLI_JAVA_TOOL_OPTIONS=-Xmx768m` for this. If a newer CLI
 still OOMs, raise that value and `mem_limit` together.
 
-**Release discovery:** 9.1.1.0 changed `binaries list` so a `--vcf-version`
-range no longer enumerates past releases. On CLI ≥ 9.1.1 the app uses the
-new `releases list` command instead (release lines only — individual patch
-builds like `9.1.0.0200` are no longer separately listable); on older CLIs
-the previous scan is used unchanged.
+**Release discovery / listing:** 9.1.1.0 changed `binaries list` — a
+`--vcf-version` range no longer enumerates past releases, and it defaults to
+showing only the newest build of each component. On CLI ≥ 9.1.1 the app uses
+the new `releases list` command for the release tree, and adds
+`--latest=false` when listing a release's binaries so every patch build
+(`9.1.0.0`, `9.1.0.0100`, …) shows again. On older CLIs both behave as
+before, unchanged.
 
 # Features
 

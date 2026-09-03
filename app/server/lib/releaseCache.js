@@ -1,6 +1,6 @@
 const { runCli } = require('./cliRunner');
 const { parseTable } = require('./tableParser');
-const { getCliVersion } = require('./cliVersion');
+const { cliAtLeast } = require('./cliVersion');
 const {
   TOKEN_FILE,
   RELEASE_SCAN_START,
@@ -207,8 +207,7 @@ async function scanViaReleasesList() {
 }
 
 async function scanAllReleases() {
-  const cliVersion = await getCliVersion();
-  if (cliVersion && compareVersions(cliVersion, RELEASES_LIST_MIN_CLI) >= 0) {
+  if (await cliAtLeast(RELEASES_LIST_MIN_CLI)) {
     try {
       return await scanViaReleasesList();
     } catch (err) {
