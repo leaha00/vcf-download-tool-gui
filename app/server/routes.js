@@ -10,10 +10,18 @@ const scheduleStore = require('./lib/scheduleStore');
 const { getReleases } = require('./lib/releaseCache');
 const { listBinaries, deleteBinaries } = require('./lib/binaries');
 const depotIndex = require('./lib/depotIndex');
+const artifactsIndex = require('./lib/artifactsIndex');
 const { startDownload, getLiveJob } = require('./lib/downloadJobs');
 const jobStore = require('./lib/jobStore');
 const cliLogs = require('./lib/cliLogs');
-const { getCliVersion } = require('./lib/cliVersion');
+const { getCliVersion, cliAtLeast } = require('./lib/cliVersion');
+const {
+  listArtifacts,
+  ARTIFACT_CATEGORIES,
+  ARTIFACT_COMPONENTS,
+  CATEGORY_KEYS,
+  COMPONENT_KEYS,
+} = require('./lib/artifacts');
 const { getDepotStorage } = require('./lib/diskUsage');
 const { getStats } = require('./lib/systemStats');
 const cliInstall = require('./lib/cliInstall');
@@ -42,8 +50,21 @@ router.get('/version', (req, res) => {
   res.json({ version: APP_VERSION, depotDir: DEPOT_DIR });
 });
 
+// `artifacts` (OCI-based content: VKR, Supervisor, VKS, ...) landed in CLI
+// 9.1.1.0. Below that the front-end keeps the classic Install/Upgrade/Both
+// Type dropdown; at or above it, "Both" is dropped and the artifact
+// categories/components are offered as extra Type options.
+const ARTIFACTS_MIN_CLI = '9.1.1';
+
 router.get('/cli-version', async (req, res) => {
-  res.json({ cliVersion: await getCliVersion() });
+  const cliVersion = await getCliVersion();
+  const artifactsSupported = await cliAtLeast(ARTIFACTS_MIN_CLI);
+  res.json({
+    cliVersion,
+    artifactsSupported,
+    artifactCategories: artifactsSupported ? ARTIFACT_CATEGORIES : [],
+    artifactComponents: artifactsSupported ? ARTIFACT_COMPONENTS : [],
+  });
 });
 
 router.get('/storage', async (req, res) => {
@@ -182,9 +203,40 @@ router.get('/binaries', async (req, res) => {
   }
 });
 
+// CLI >= 9.1.1 only. Lists OCI-based workload-component artifacts for one
+// VCF version, narrowed to a single --category or --component. Same row
+// shape as /binaries so the front-end table renders it unchanged.
+router.get('/artifacts', async (req, res) => {
+  try {
+    if (!(await cliAtLeast(ARTIFACTS_MIN_CLI))) {
+      res.status(409).json({ error: 'The installed CLI is older than 9.1.1 - artifacts are not available.' });
+      return;
+    }
+    const { version, sku, category, component } = req.query;
+    const result = await listArtifacts({ version, sku, category, component });
+    const idx = await artifactsIndex.getIndex();
+    const binaries = result.artifacts.map((a) => {
+      const st = artifactsIndex.artifactState(idx, a.component, a.version);
+      return { ...a, downloaded: st === 'downloaded', partial: st === 'partial' };
+    });
+    res.json({ binaries, queriedVersion: result.queriedVersion });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
 router.post('/delete', async (req, res) => {
   try {
-    const binaries = (req.body && req.body.binaries) || [];
+    const body = req.body || {};
+    const binaries = body.binaries || [];
+    if (body.mode === 'artifacts') {
+      const result = await artifactsIndex.deleteArtifacts(
+        binaries.map((b) => ({ component: b.component, version: b.version }))
+      );
+      artifactsIndex.invalidate();
+      res.json({ ok: true, ...result });
+      return;
+    }
     const result = await deleteBinaries(binaries);
     depotIndex.invalidate();
     res.json({ ok: true, ...result });
@@ -199,9 +251,25 @@ router.get('/downloads', (req, res) => {
 
 router.post('/download', (req, res) => {
   try {
-    const ids = req.body && req.body.ids;
-    const binaries = (req.body && req.body.binaries) || [];
-    const jobId = startDownload(ids, binaries);
+    const body = req.body || {};
+    const ids = body.ids;
+    const binaries = body.binaries || [];
+
+    const opts = {};
+    if (body.mode === 'artifacts') {
+      const category = body.category || null;
+      const component = body.component || null;
+      if (category && !CATEGORY_KEYS.has(category)) throw new Error(`Unknown artifact category: ${category}`);
+      if (component && !COMPONENT_KEYS.has(component)) throw new Error(`Unknown artifact component: ${component}`);
+      if (!category && !component) throw new Error('An artifact category or component is required');
+      if (!body.vcfVersion) throw new Error('A VCF version is required for artifact downloads');
+      opts.mode = 'artifacts';
+      opts.sku = body.sku || 'VCF';
+      opts.vcfVersion = body.vcfVersion;
+      opts.filter = category ? { category } : { component };
+    }
+
+    const jobId = startDownload(ids, binaries, opts);
     res.json({ jobId });
   } catch (err) {
     handleError(res, err);

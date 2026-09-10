@@ -25,6 +25,8 @@ The following versions of the CLI were tested and work
 - CLI version displayed in the GUI
 - Searchable downloads list
 - Filter by patch/upgrade files and install files
+- CLI 9.1.1+: download OCI artifacts (VKR, Supervisor, VKS, DSM, ...) via the
+  new `artifacts` command, straight from the Type dropdown
 - Order by release date, size and downloaded columns
 - Log visibility
 
@@ -149,12 +151,35 @@ Open the GUI and click **Settings**:
   there's nothing to scan. That product line is done shipping new releases,
   so this isn't expected to need updates.
 - **Manual version** input lets you query an arbitrary VCF version directly.
-- Pick SKU (VCF/VVF) and Type (Install/Upgrade/Both), select binaries by
-  checkbox, then **Download selected**. Progress streams live via
-  Server-Sent Events.
+- Pick SKU (VCF/VVF) and Type, select rows by checkbox, then **Download
+  selected**. Progress streams live via Server-Sent Events.
+- The **Type** dropdown adapts to the installed CLI:
+  - **CLI < 9.1.1** — `Install + Upgrade` / `Install` / `Upgrade`, unchanged.
+  - **CLI ≥ 9.1.1** — `Install` (default) / `Patch`. The combined
+    "Install + Upgrade" option is dropped, and an **OCI artifacts** group is
+    added: `vSphere Kubernetes Releases (VKR)` plus the six `artifacts`
+    categories (`SUPERVISOR`, `VKS`, `SUPERVISOR_SERVICE`, `VCF_CLI`,
+    `VCF_SERVICE`, `DSM`). Picking one lists that content via the CLI's new
+    `artifacts list`; **Download selected** runs `artifacts download` once
+    per selected row (`--component-version=<v>` with the matching
+    `--category`/`--component`) into the same depot store. **Downloaded**
+    state is detected per component (`<depot>/PROD/COMP/<COMPONENT>/`):
+    `✓ Downloaded` once the manifests and — for OCI components — the
+    `<bundle>.tar` are all present, `Partial` while the `imgpkg` pull is
+    incomplete or was interrupted. **Delete selected** works for artifacts
+    too (removes that component-version's files + `*-images` dir).
+    The OCI-image half of an artifact download runs `imgpkg` against
+    `vcf.packages.broadcom.com` (token from `eapi.broadcom.com`) — both must
+    be reachable from the container, on top of the usual `dl.broadcom.com`.
+    The GUI shows no per-file progress for the `imgpkg` phase, so a large
+    pull can look idle while it works — check the job log.
 - The bar in the top center shows the depot store's disk usage (via
   `fs.statfs` on `DEPOT_DIR`), refreshing every 30s normally and every 3s
   while a download is active.
+- The SKU/Type/Frequency dropdowns are custom widgets, not native
+  `<select>`s — Chromium mispositions a native `<select>` popup when the app
+  is embedded in the vcf-lab-toolkit iframe. The real `<select>` is still in
+  the page (hidden) as the value source.
 
 Note: the CLI only reliably supports exact version pinning for GA releases
 (`a.b.c.0`); async patch builds (`a.b.c.0100`, `.0200`, ...) return nothing

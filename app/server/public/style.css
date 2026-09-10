@@ -335,6 +335,7 @@ tr.row-downloaded { background: var(--accent-dim); }
 .downloaded-badge { color: var(--accent); font-weight: 600; }
 .pending-badge { color: var(--text-dim); font-style: italic; }
 .failed-badge { color: var(--danger); font-weight: 600; }
+.partial-badge { color: #d98e04; font-weight: 600; cursor: help; }
 th { color: var(--text-dim); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; }
 td:nth-child(2) { white-space: normal; min-width: 200px; }
 
@@ -490,3 +491,83 @@ td:nth-child(2) { white-space: normal; min-width: 200px; }
 
 .toast.error { background: var(--danger); color: #fff; }
 .toast.hidden { display: none; }
+
+/* ---------- Custom dropdown ----------
+   Replaces the native <select> option list, which Chromium mispositions
+   (renders it offset up/left, over the Releases rail) when the app is
+   embedded in the vcf-lab-toolkit shell - a native popup anchored to a
+   <select> inside an offset cross-origin iframe. This popup lives in our
+   own DOM so it always anchors to its trigger. The real <select> stays in
+   the page (visually hidden) and remains the source of truth - all the
+   existing .value / selectedOptions / 'change' code keeps working. */
+.cs { position: relative; }
+select.cs-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.cs-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.9rem;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.cs-trigger::after {
+  content: "▾";
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+.cs-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cs.open .cs-trigger { border-color: var(--accent); }
+.cs-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filters .cs { min-width: 160px; }
+.cs-panel {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: 50;
+  min-width: 100%;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.25rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.cs-opt {
+  padding: 0.4rem 0.55rem;
+  border-radius: 4px;
+  font-size: 0.88rem;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cs-opt:hover,
+.cs-opt.active { background: var(--accent-dim); }
+.cs-opt.selected { color: var(--accent); }
+.cs-group-label {
+  padding: 0.5rem 0.55rem 0.2rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.cs-group-label:first-child { padding-top: 0.2rem; }

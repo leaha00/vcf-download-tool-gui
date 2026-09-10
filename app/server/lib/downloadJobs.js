@@ -4,6 +4,7 @@ const { EventEmitter } = require('events');
 const { streamCli } = require('./cliRunner');
 const { TOKEN_FILE, DEPOT_DIR, DOWNLOAD_LOGS_DIR } = require('./config');
 const depotIndex = require('./depotIndex');
+const artifactsIndex = require('./artifactsIndex');
 const jobStore = require('./jobStore');
 const { parseSize } = require('./sizeUtils');
 const { parseTable } = require('./tableParser');
@@ -17,10 +18,16 @@ const liveJobs = new Map();
 
 const PROGRESS_RE = /^Download Progress of\s*:\s*(.+?)\s*:\s*([\d.]+)\s*MB/;
 
-function startDownload(ids, binaries) {
+// opts (all optional):
+//   mode: 'binaries' (default) | 'artifacts'
+//   sku, vcfVersion: required for 'artifacts'
+//   filter: { category } or { component } - required for 'artifacts'
+function startDownload(ids, binaries, opts = {}) {
   if (!Array.isArray(ids) || ids.length === 0) {
     throw new Error('At least one binary id is required');
   }
+
+  const mode = opts.mode === 'artifacts' ? 'artifacts' : 'binaries';
 
   const job = jobStore.createJob(binaries);
   const jobId = job.id;
@@ -46,6 +53,44 @@ function startDownload(ids, binaries) {
     }
   };
 
+  const finish = (code) => {
+    jobStore.finishJob(jobId, { status: code === 0 ? 'complete' : 'error', exitCode: code });
+    emit(code === 0 ? 'Download complete.' : `Download failed (exit code ${code}).`);
+    if (code === 0) {
+      depotIndex.invalidate();
+      artifactsIndex.invalidate();
+    }
+    logStream.end();
+    emitter.emit('done');
+    scheduleCleanup(jobId);
+    pruneOrphanLogs();
+  };
+
+  const runner =
+    mode === 'artifacts'
+      ? runArtifactsDownload(jobId, binaries, opts, emit)
+      : runBinariesDownload(jobId, ids, binaries, emit);
+
+  runner
+    .then((code) => {
+      if (mode === 'binaries') finalizeBinaryStatuses(jobId, binaries, lines, code);
+      finish(code);
+    })
+    .catch((err) => {
+      if (mode === 'binaries') finalizeBinaryStatuses(jobId, binaries, lines, -1);
+      else markRemainingFailed(jobId, binaries);
+      emit(`Failed to start download: ${err.message}`);
+      finish(-1);
+    });
+
+  return jobId;
+}
+
+// --- binaries download (the CLI's `binaries download --id=...`) -----------
+// Unchanged behaviour: one CLI invocation for the whole selection, with
+// per-binary progress attributed by matching the version string in each
+// downloaded filename.
+function runBinariesDownload(jobId, ids, binaries, emit) {
   // Per-binary progress tracking. A binary/bundle can span several files
   // (tgz, yaml manifest, config schema, ...) and the CLI only reports
   // cumulative bytes per *file*, not per bundle - sum every file we've seen
@@ -83,7 +128,7 @@ function startDownload(ids, binaries) {
 
   emit(`Starting download of ${ids.length} binaries to ${DEPOT_DIR} ...`);
 
-  streamCli(
+  return streamCli(
     [
       'binaries',
       'download',
@@ -95,30 +140,81 @@ function startDownload(ids, binaries) {
       emit(line);
       handleProgress(line);
     }
-  )
-    .then((child) => {
-      child.on('close', (code) => {
-        finalizeBinaryStatuses(jobId, binaries, lines, code);
-        jobStore.finishJob(jobId, { status: code === 0 ? 'complete' : 'error', exitCode: code });
-        emit(code === 0 ? 'Download complete.' : `Download failed (exit code ${code}).`);
-        if (code === 0) depotIndex.invalidate();
-        logStream.end();
-        emitter.emit('done');
-        scheduleCleanup(jobId);
-        pruneOrphanLogs();
-      });
-    })
-    .catch((err) => {
-      finalizeBinaryStatuses(jobId, binaries, lines, -1);
-      jobStore.finishJob(jobId, { status: 'error', exitCode: -1 });
-      emit(`Failed to start download: ${err.message}`);
-      logStream.end();
-      emitter.emit('done');
-      scheduleCleanup(jobId);
-      pruneOrphanLogs();
-    });
+  ).then((child) => new Promise((resolve) => child.on('close', (code) => resolve(code ?? -1))));
+}
 
-  return jobId;
+// --- artifacts download (CLI >= 9.1.1 `artifacts download`) --------------
+// The artifacts command's filters (--category / --component) plus
+// --component-version pin one workload-component build at a time, so a
+// multi-select is run as a sequence of CLI invocations - one per selected
+// row - rather than a single --id list. Each still shares the global CLI
+// lock (streamCli), so a list/other download queues behind the whole batch.
+async function runArtifactsDownload(jobId, binaries, opts, emit) {
+  const sku = opts.sku || 'VCF';
+  const vcfVersion = opts.vcfVersion;
+  const filter = opts.filter || {};
+  if (!vcfVersion) throw new Error('vcfVersion is required for artifact downloads');
+  if (!filter.category && !filter.component) {
+    throw new Error('an artifact category or component is required');
+  }
+
+  emit(
+    `Starting download of ${binaries.length} artifact${binaries.length === 1 ? '' : 's'} to ${DEPOT_DIR} ...`
+  );
+
+  let anyFailed = false;
+  for (const b of binaries) {
+    jobStore.updateBinaryStatus(jobId, b.id, { status: 'downloading', percent: 0 });
+    const label = b.component_full_name || b.fullName || b.component || 'artifact';
+    emit(`\n--- ${label} ${b.version} ---`);
+
+    const args = [
+      'artifacts',
+      'download',
+      `--depot-download-activation-code-file=${TOKEN_FILE}`,
+      `--sku=${sku}`,
+      `--vcf-version=${vcfVersion}`,
+      `--depot-store=${DEPOT_DIR}`,
+      `--component-version=${b.version}`,
+    ];
+    if (filter.category) args.push(`--category=${filter.category}`);
+    if (filter.component) args.push(`--component=${filter.component}`);
+
+    const total = parseSize(b.size);
+    const onLine = (line) => {
+      emit(line);
+      const m = PROGRESS_RE.exec(line);
+      if (!m || !total) return;
+      const mb = parseFloat(m[2]);
+      const percent = Math.min(99, Math.round(((mb * 1_000_000) / total) * 100));
+      jobStore.updateBinaryStatus(jobId, b.id, { status: 'downloading', percent });
+    };
+
+    let code;
+    try {
+      const child = await streamCli(args, onLine);
+      code = await new Promise((resolve) => child.on('close', (c) => resolve(c ?? -1)));
+    } catch (err) {
+      emit(`Error: ${err.message}`);
+      code = -1;
+    }
+
+    const ok = code === 0;
+    jobStore.updateBinaryStatus(jobId, b.id, {
+      status: ok ? 'done' : 'failed',
+      percent: ok ? 100 : undefined,
+    });
+    emit(ok ? 'Artifact download complete.' : `Artifact download failed (exit code ${code}).`);
+    if (!ok) anyFailed = true;
+  }
+
+  return anyFailed ? 1 : 0;
+}
+
+function markRemainingFailed(jobId, binaries) {
+  for (const b of binaries) {
+    jobStore.updateBinaryStatus(jobId, b.id, { status: 'failed' });
+  }
 }
 
 // The CLI prints a final pipe-table summarizing per-binary outcome, e.g.:

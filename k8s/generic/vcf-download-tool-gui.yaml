@@ -1,0 +1,201 @@
+# VCF Download Tool GUI — Kubernetes deployment (generic / publishable variant).
+#
+# Equivalent to the repo's docker-compose.yml. Resources, in order: NFS
+# PersistentVolume (cluster-scoped), ConfigMap, token + depot PVCs,
+# Deployment, and two Services — a LoadBalancer for the web UI (port 80) and
+# a ClusterIP for the internal depot API (10080, in-cluster consumers only).
+#
+# Before applying, review:
+#   - the NFS server/path in the PersistentVolume (shared with the offline
+#     depot; nfsvers=3 only, enforces root_squash)
+#   - PUID/PGID in the ConfigMap (match the depot share's owner if it
+#     already has content)
+#
+# The container starts as root so entrypoint.sh can remap the app user to
+# PUID/PGID, then drops privileges via setpriv before running node. The CLI
+# is uploaded through the GUI into the token volume — no bind mount, no
+# second volume. See the repo's README.md.
+#
+# This file is the kustomize base. Deploy directly with:
+#   kubectl apply -k k8s/generic/ -n <namespace>
+#
+# It sets NO fixed LoadBalancer address. The homelab overlay (k8s/homelab/)
+# patches spec.loadBalancerIP onto the web UI Service; see the commented
+# line on that Service.
+---
+# Static NFS PersistentVolume for the download depot. Cluster-scoped; the
+# vcf-depot PVC below binds to it from its own side via spec.volumeName, so
+# no claimRef is set here (a claimRef would pin the binding to one
+# namespace). Same share the offline depot mounts — nfsvers=3 only (not v4).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vcf-depot-nfs
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions:
+    - nfsvers=3
+    - nolock
+    - soft
+  nfs:
+    server: 192.168.1.4
+    path: /mnt/Sol/General/vcf-depot
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vcf-download-tool-gui
+data:
+  PORT: "8080"
+  INTERNAL_PORT: "10080"
+  PUID: "1000"
+  PGID: "1000"
+  # Heap for the bundled-JRE CLI — it sets no -Xmx of its own, so without
+  # this the JVM caps its heap at ~25% of the memory limit and CLI 9.1.1.0+
+  # OOMs mid-download. Raise this and the Deployment memory limit together
+  # if a newer CLI still OOMs.
+  CLI_JAVA_TOOL_OPTIONS: "-Xmx768m"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vcf-token
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  # Uses the cluster default StorageClass. Set storageClassName to pin one.
+  # Holds the activation code, per-installation depot ID, the uploaded CLI,
+  # job history and logs. App-managed — nothing to pre-populate.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vcf-depot
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Ti
+  storageClassName: ""
+  volumeName: vcf-depot-nfs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vcf-download-tool-gui
+  labels:
+    app: vcf-download-tool-gui
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vcf-download-tool-gui
+  template:
+    metadata:
+      labels:
+        app: vcf-download-tool-gui
+    spec:
+      securityContext:
+        # entrypoint.sh runs groupmod/usermod/chown as root, then hands off
+        # to node as PUID/PGID via setpriv.
+        runAsUser: 0
+        fsGroup: 1000
+      containers:
+        - name: app
+          image: ghcr.io/leaha00/vcf-download-tool-gui:1.5.1
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: vcf-download-tool-gui
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: internal
+              containerPort: 10080
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              # Minimum for entrypoint.sh: edit /etc/passwd + /etc/group
+              # (usermod/groupmod), chown the app dirs, drop to PUID/PGID.
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "SETPCAP"]
+          livenessProbe:
+            httpGet:
+              path: /api/version
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/version
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: token
+              mountPath: /data/token
+            - name: depot
+              mountPath: /mnt/vcf-depot
+      volumes:
+        - name: token
+          persistentVolumeClaim:
+            claimName: vcf-token
+        - name: depot
+          persistentVolumeClaim:
+            claimName: vcf-depot
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vcf-download-tool-gui
+  labels:
+    app: vcf-download-tool-gui
+spec:
+  type: LoadBalancer
+  # Pin a fixed address by uncommenting this line — the k8s/homelab/ overlay
+  # sets it.
+  # loadBalancerIP: 192.168.20.41
+  externalTrafficPolicy: Local
+  selector:
+    app: vcf-download-tool-gui
+  ports:
+    - name: http
+      port: 80
+      # named container port "http" -> containerPort 8080 (ConfigMap PORT)
+      targetPort: http
+---
+# Internal depot API — in-cluster only, never exposed. vcf-web-depot reaches
+# it at http://vcf-download-tool-gui-internal:10080 (same namespace).
+apiVersion: v1
+kind: Service
+metadata:
+  name: vcf-download-tool-gui-internal
+  labels:
+    app: vcf-download-tool-gui
+spec:
+  type: ClusterIP
+  selector:
+    app: vcf-download-tool-gui
+  ports:
+    - name: internal
+      port: 10080
+      targetPort: internal

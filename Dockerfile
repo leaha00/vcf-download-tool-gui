@@ -19,10 +19,21 @@ RUN npm install --omit=dev
 
 FROM node:20-bookworm-slim
 
-# Picks up whatever Debian security-repo fixes exist as of build time
-# (e.g. libgnutls30, libcap2) rather than whatever the base image snapshot
-# shipped with.
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+# apt-get upgrade picks up whatever Debian security-repo fixes exist as of
+# build time (e.g. libgnutls30, libcap2) rather than whatever the base image
+# snapshot shipped with.
+#
+# ca-certificates: the node base bundles its own CA store and the uploaded
+# CLI's JRE has its own cacerts, so the GUI and the CLI's Java HTTP calls
+# (dl.broadcom.com, eapi.broadcom.com) work without this. But CLI 9.1.1's
+# `artifacts` command shells out to `imgpkg` (a Go binary) to pull OCI
+# images from vcf.packages.broadcom.com, and imgpkg trusts only the system
+# CA bundle - without it every OCI pull dies with
+# "x509: certificate signed by unknown authority" ("imgpkg describe failed
+# ... Retrying"). node:*-slim does not ship ca-certificates.
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 ENV TOKEN_DIR=/data/token \
     XDG_DATA_HOME=/data/token/xdg-data \

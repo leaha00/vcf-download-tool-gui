@@ -168,7 +168,9 @@ function extractErrorMessage(stdout, stderr, code) {
     .filter(Boolean);
 
   // Prefer known error markers over generic banner/usage noise.
-  const markers = ['Error', 'Exception', 'Invalid', 'invalid', 'failed', 'Failed'];
+  // "ERROR:" / "Fail to ..." cover the artifacts command's auth + filter
+  // messages, which don't use the same casing as the binaries command's.
+  const markers = ['Error', 'ERROR', 'Exception', 'Invalid', 'invalid', 'failed', 'Failed', 'Fail'];
   const hit = lines.find((l) => markers.some((m) => l.includes(m)));
   return hit || `vcf-download-tool exited with code ${code}`;
 }

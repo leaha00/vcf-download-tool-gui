@@ -12,13 +12,158 @@ const state = {
   binariesLoading: false,
   binariesError: null,
   loadSeq: 0,
+  // CLI >= 9.1.1 capability + Type-dropdown mode. browseMode is 'binaries'
+  // (the classic `binaries list`) or 'artifacts' (`artifacts list`, CLI
+  // 9.1.1+ only); artifactFilter is { category } or { component } for the
+  // latter.
+  cliVersion: null,
+  artifactsSupported: false,
+  artifactCategories: [],
+  artifactComponents: [],
+  browseMode: 'binaries',
+  artifactFilter: null,
 };
+
+// Numeric-segment version compare, mirrors the server's cliVersion.js.
+function cmpVersion(a, b) {
+  const ka = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+  const kb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
+    const diff = (ka[i] || 0) - (kb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
 
 function anyJobRunning() {
   return state.jobs.some((j) => j.status === 'running');
 }
 
 const $ = (id) => document.getElementById(id);
+
+// ---------- Custom dropdown ----------
+// The native <select> popup is mispositioned by Chromium when this app runs
+// inside the vcf-lab-toolkit iframe (offset cross-origin frame). Wrap each
+// <select> in a DOM-owned dropdown that anchors to its own trigger; the real
+// <select> stays as the value source of truth (hidden), so every existing
+// `.value` / `.selectedOptions` / 'change' path is untouched. After code
+// mutates a select's options or value programmatically, call
+// `select._cs.sync()` to repaint.
+let csOpenInstance = null;
+
+function enhanceSelect(select) {
+  if (!select || select._cs) return;
+  select.classList.add('cs-native');
+  select.tabIndex = -1;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'cs';
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'cs-trigger';
+  trigger.setAttribute('aria-haspopup', 'listbox');
+  trigger.setAttribute('aria-expanded', 'false');
+  const label = document.createElement('span');
+  label.className = 'cs-trigger-label';
+  trigger.appendChild(label);
+  const panel = document.createElement('div');
+  panel.className = 'cs-panel';
+  panel.setAttribute('role', 'listbox');
+  panel.hidden = true;
+
+  select.parentNode.insertBefore(wrap, select);
+  wrap.appendChild(select);
+  wrap.appendChild(trigger);
+  wrap.appendChild(panel);
+
+  const optionEls = () => [...select.querySelectorAll('option')];
+
+  const close = () => {
+    if (panel.hidden) return;
+    panel.hidden = true;
+    wrap.classList.remove('open');
+    trigger.setAttribute('aria-expanded', 'false');
+    if (csOpenInstance === api) csOpenInstance = null;
+  };
+
+  const open = () => {
+    if (!panel.hidden) return;
+    if (csOpenInstance) csOpenInstance.close();
+    buildPanel();
+    panel.hidden = false;
+    wrap.classList.add('open');
+    trigger.setAttribute('aria-expanded', 'true');
+    csOpenInstance = api;
+    const sel = panel.querySelector('.cs-opt.selected');
+    if (sel) sel.scrollIntoView({ block: 'nearest' });
+  };
+
+  const pick = (value) => {
+    if (select.value !== value) {
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    syncLabel();
+    close();
+    trigger.focus();
+  };
+
+  const syncLabel = () => {
+    const opt = select.selectedOptions[0];
+    label.textContent = opt ? opt.textContent : '';
+  };
+
+  function buildPanel() {
+    panel.innerHTML = '';
+    for (const node of select.children) {
+      if (node.tagName === 'OPTGROUP') {
+        const gl = document.createElement('div');
+        gl.className = 'cs-group-label';
+        gl.textContent = node.label;
+        panel.appendChild(gl);
+        for (const opt of node.children) panel.appendChild(makeOpt(opt));
+      } else if (node.tagName === 'OPTION') {
+        panel.appendChild(makeOpt(node));
+      }
+    }
+  }
+
+  function makeOpt(opt) {
+    const el = document.createElement('div');
+    el.className = 'cs-opt' + (opt.value === select.value ? ' selected' : '');
+    el.setAttribute('role', 'option');
+    el.textContent = opt.textContent;
+    el.addEventListener('click', () => pick(opt.value));
+    return el;
+  }
+
+  const moveSelection = (dir) => {
+    const opts = optionEls();
+    const i = opts.findIndex((o) => o.value === select.value);
+    const next = opts[Math.max(0, Math.min(opts.length - 1, i + dir))];
+    if (next) pick(next.value);
+  };
+
+  trigger.addEventListener('click', () => (panel.hidden ? open() : close()));
+  trigger.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); panel.hidden ? open() : moveSelection(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); panel.hidden ? open() : moveSelection(-1); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); panel.hidden ? open() : close(); }
+    else if (e.key === 'Escape') { close(); }
+  });
+
+  const api = { close, sync: syncLabel };
+  select._cs = api;
+  syncLabel();
+}
+
+// One document-level dismiss for whichever custom dropdown is open.
+document.addEventListener('click', (e) => {
+  if (csOpenInstance && !e.target.closest('.cs')) csOpenInstance.close();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && csOpenInstance) csOpenInstance.close();
+});
 
 // ---------- Content-pane view switching (Browse / Downloads / Settings) ----------
 // These three panes live in the content column as siblings, not overlays -
@@ -69,10 +214,81 @@ async function loadVersion() {
 // mounted - neither should hold up anything else on the page.
 async function loadCliVersion() {
   try {
-    const { cliVersion } = await api('/cli-version');
-    $('cli-version').textContent = cliVersion ? `CLI ${cliVersion}` : '';
+    const data = await api('/cli-version');
+    $('cli-version').textContent = data.cliVersion ? `CLI ${data.cliVersion}` : '';
+    state.cliVersion = data.cliVersion || null;
+    state.artifactsSupported = !!data.artifactsSupported;
+    state.artifactCategories = data.artifactCategories || [];
+    state.artifactComponents = data.artifactComponents || [];
   } catch (err) {
     $('cli-version').textContent = '';
+    state.cliVersion = null;
+    state.artifactsSupported = false;
+    state.artifactCategories = [];
+    state.artifactComponents = [];
+  }
+  applyCliCapabilities();
+}
+
+// Rebuilds the Type dropdown from the installed CLI's capabilities.
+//   CLI < 9.1.1:  Install + Upgrade (default) / Install / Upgrade  (unchanged)
+//   CLI >= 9.1.1: Install (default) / Patch, then an "OCI artifacts" optgroup
+//                 with VKR + the six --category buckets. "Both" is dropped.
+// Preserves the current selection where it still exists.
+function applyCliCapabilities() {
+  const select = $('type-select');
+  const previous = select.value;
+  select.innerHTML = '';
+
+  const addOption = (parent, value, label, dataset) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    Object.entries(dataset || {}).forEach(([k, v]) => (opt.dataset[k] = v));
+    parent.appendChild(opt);
+  };
+
+  if (!state.artifactsSupported) {
+    addOption(select, 'BOTH', 'Install + Upgrade', { mode: 'binaries' });
+    addOption(select, 'INSTALL', 'Install', { mode: 'binaries' });
+    addOption(select, 'UPGRADE', 'Upgrade', { mode: 'binaries' });
+  } else {
+    addOption(select, 'INSTALL', 'Install', { mode: 'binaries' });
+    addOption(select, 'UPGRADE', 'Patch', { mode: 'binaries' });
+
+    const group = document.createElement('optgroup');
+    group.label = 'OCI artifacts (CLI 9.1.1+)';
+    for (const c of state.artifactComponents) {
+      addOption(group, `ARTIFACT_COMPONENT_${c.key}`, c.label, { mode: 'artifacts', component: c.key });
+    }
+    for (const c of state.artifactCategories) {
+      addOption(group, `ARTIFACT_CATEGORY_${c.key}`, c.label, { mode: 'artifacts', category: c.key });
+    }
+    select.appendChild(group);
+  }
+
+  const stillThere = previous && [...select.options].some((o) => o.value === previous);
+  select.value = stillThere ? previous : (state.artifactsSupported ? 'INSTALL' : 'BOTH');
+  if (select._cs) select._cs.sync();
+  syncBrowseModeFromType();
+
+  // If the effective Type changed (e.g. CLI version resolved after the user
+  // had already picked a release and the default moved from Both to
+  // Install), re-list against the new filter.
+  if (previous && select.value !== previous && state.selectedVersion) loadBinaries();
+}
+
+// Reads mode/category/component off the selected Type <option> into state.
+function syncBrowseModeFromType() {
+  const opt = $('type-select').selectedOptions[0];
+  if (opt && opt.dataset.mode === 'artifacts') {
+    state.browseMode = 'artifacts';
+    state.artifactFilter = opt.dataset.category
+      ? { category: opt.dataset.category }
+      : { component: opt.dataset.component };
+  } else {
+    state.browseMode = 'binaries';
+    state.artifactFilter = null;
   }
 }
 
@@ -289,6 +505,7 @@ async function refreshScheduleStatus() {
   const data = await api('/schedule');
   $('schedule-enabled-input').checked = !!data.enabled;
   $('schedule-mode-input').value = data.mode || 'daily';
+  if ($('schedule-mode-input')._cs) $('schedule-mode-input')._cs.sync();
   $('schedule-time-input').value = data.time || '03:00';
   document.querySelectorAll('.schedule-day-input').forEach((cb) => {
     cb.checked = (data.days || []).includes(Number(cb.value));
@@ -487,7 +704,10 @@ $('releases-nav-header').addEventListener('click', () => switchView('browse'));
 
 // ---------- Binaries ----------
 $('sku-select').addEventListener('change', () => state.selectedVersion && loadBinaries());
-$('type-select').addEventListener('change', () => state.selectedVersion && loadBinaries());
+$('type-select').addEventListener('change', () => {
+  syncBrowseModeFromType();
+  if (state.selectedVersion) loadBinaries();
+});
 $('search-input').addEventListener('input', (e) => {
   state.searchQuery = e.target.value;
   renderBinaries();
@@ -503,12 +723,23 @@ async function loadBinaries() {
   updateSelectionUi();
 
   try {
-    const params = new URLSearchParams({
-      version: state.selectedVersion,
-      sku: $('sku-select').value,
-      type: $('type-select').value,
-    });
-    const data = await api(`/binaries?${params}`);
+    let data;
+    if (state.browseMode === 'artifacts') {
+      const params = new URLSearchParams({
+        version: state.selectedVersion,
+        sku: $('sku-select').value,
+        ...(state.artifactFilter.category ? { category: state.artifactFilter.category } : {}),
+        ...(state.artifactFilter.component ? { component: state.artifactFilter.component } : {}),
+      });
+      data = await api(`/artifacts?${params}`);
+    } else {
+      const params = new URLSearchParams({
+        version: state.selectedVersion,
+        sku: $('sku-select').value,
+        type: $('type-select').value,
+      });
+      data = await api(`/binaries?${params}`);
+    }
     if (mySeq !== state.loadSeq) return; // a newer load started while this was in flight
     state.binaries = data.binaries;
     applySort();
@@ -616,7 +847,9 @@ function downloadedCellHtml(b, live) {
       return `<span class="failed-badge">${live.status === 'failed' ? 'Failed' : 'Cancelled'}</span>`;
     }
   }
-  return b.downloaded ? '<span class="downloaded-badge">✓ Downloaded</span>' : '';
+  if (b.downloaded) return '<span class="downloaded-badge">✓ Downloaded</span>';
+  if (b.partial) return '<span class="partial-badge" title="Some files present but the OCI image pull is incomplete">Partial</span>';
+  return '';
 }
 
 // ---------- Sorting ----------
@@ -630,7 +863,7 @@ const SORT_ACCESSORS = {
   component_full_name: (b) => (b.component_full_name || '').toLowerCase(),
   release_date: (b) => parseDate(b.release_date),
   size: (b) => parseSize(b.size),
-  downloaded: (b) => (b.downloaded ? 1 : 0),
+  downloaded: (b) => (b.downloaded ? 2 : b.partial ? 1 : 0),
 };
 
 function applySort() {
@@ -700,7 +933,11 @@ function updateSelectionUi() {
   const selected = state.binaries.filter((b) => state.selectedIds.has(b.id));
   const count = selected.length;
   const totalBytes = selected.reduce((sum, b) => sum + parseSize(b.size), 0);
-  const downloadedCount = selected.filter((b) => b.downloaded).length;
+  // Deletable = anything on disk. For artifacts that includes "partial"
+  // rows (interrupted OCI pulls) so a half-download can be cleared out.
+  const downloadedCount = selected.filter(
+    (b) => b.downloaded || (state.browseMode === 'artifacts' && b.partial)
+  ).length;
 
   $('selection-summary').textContent = count > 0 ? `${count} selected — ${formatSize(totalBytes)}` : '';
   $('download-btn').disabled = count === 0;
@@ -824,10 +1061,19 @@ $('download-btn').addEventListener('click', async () => {
   if (ids.length === 0) return;
   const binaries = state.binaries.filter((b) => state.selectedIds.has(b.id));
 
+  const payload = { ids, binaries };
+  if (state.browseMode === 'artifacts') {
+    payload.mode = 'artifacts';
+    payload.sku = $('sku-select').value;
+    payload.vcfVersion = state.selectedVersion;
+    payload.category = state.artifactFilter.category || null;
+    payload.component = state.artifactFilter.component || null;
+  }
+
   openDownloadLog(null);
 
   try {
-    const { jobId } = await api('/download', { method: 'POST', body: JSON.stringify({ ids, binaries }) });
+    const { jobId } = await api('/download', { method: 'POST', body: JSON.stringify(payload) });
     streamDownload(jobId);
     refreshJobs();
   } catch (err) {
@@ -836,11 +1082,15 @@ $('download-btn').addEventListener('click', async () => {
 });
 
 $('delete-btn').addEventListener('click', async () => {
-  const toDelete = state.binaries.filter((b) => state.selectedIds.has(b.id) && b.downloaded);
+  const artifacts = state.browseMode === 'artifacts';
+  const toDelete = state.binaries.filter(
+    (b) => state.selectedIds.has(b.id) && (b.downloaded || (artifacts && b.partial))
+  );
   if (toDelete.length === 0) return;
 
+  const noun = artifacts ? 'artifact' : 'binary';
   const confirmed = window.confirm(
-    `Delete ${toDelete.length} downloaded binar${toDelete.length === 1 ? 'y' : 'ies'} from the depot store? This removes the files on disk and can't be undone.`
+    `Delete ${toDelete.length} ${noun}${toDelete.length === 1 ? '' : 's'} from the depot store? This removes the files on disk and can't be undone.`
   );
   if (!confirmed) return;
 
@@ -848,13 +1098,17 @@ $('delete-btn').addEventListener('click', async () => {
     const result = await api('/delete', {
       method: 'POST',
       body: JSON.stringify({
+        ...(artifacts ? { mode: 'artifacts' } : {}),
         binaries: toDelete.map((b) => ({ component: b.component, version: b.version, type: b.type })),
       }),
     });
     // Update in place rather than re-running loadBinaries(): a fresh
     // `binaries list` would queue behind any in-progress download on the
     // CLI lock, and the server has already invalidated its depot index.
-    for (const b of toDelete) b.downloaded = false;
+    for (const b of toDelete) {
+      b.downloaded = false;
+      b.partial = false;
+    }
     state.selectedIds.clear();
     applySort();
     renderBinaries();
@@ -995,6 +1249,7 @@ $('log-load-full-btn').addEventListener('click', () => {
 });
 
 // ---------- Init ----------
+['sku-select', 'type-select', 'schedule-mode-input'].forEach((id) => enhanceSelect($(id)));
 loadVersion();
 loadCliVersion();
 loadReleases();
