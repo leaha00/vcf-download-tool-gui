@@ -9,7 +9,7 @@ something pretty <3.
 > [!WARNING]
 > ### KUBERNETES USERS: READ THIS BEFORE YOU UPGRADE AN EXISTING INSTALL
 >
-> From **v1.5.1.3** (so, **v1.5.2 and later**) the container no longer runs
+> From **v1.5.2** the container no longer runs
 > as root: it runs as a fixed non-root user, **UID/GID 1500:1500**, enforced
 > by the Deployment's `securityContext`. A `vcf-token` PVC created by v1.5.1
 > or earlier is still owned by the old user, so the new pod cannot write to
@@ -25,9 +25,7 @@ This only concerns the token/CLI volume (`/data/token`). The **depot volume**
 (`/mnt/vcf-depot`) must already permit writes from UID 1500 - if it's an NFS
 export or other shared storage, check that it does.
 
-(This section was previously titled "Upgrading from before v1.5.1.3".)
-
-**Why:** v1.5.1.3 moved to a fixed, capability-less non-root UID/GID so the
+**Why:** v1.5.2 moved to a fixed, capability-less non-root UID/GID so the
 image satisfies Kubernetes' Pod Security "restricted" profile. Because the
 runtime forces that UID before the image's entrypoint runs, the entrypoint
 never runs as root under Kubernetes and so can't repair an old PVC's
