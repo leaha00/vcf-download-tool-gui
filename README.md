@@ -4,6 +4,51 @@ A web GUI wrapper around Broadcom's `vcf-download-tool`, because it cant
 just be me who hates the CLI tool, cant remember the commands and wants
 something pretty <3.
 
+## ⚠️ Upgrading from v1.5.1 or earlier
+
+> [!WARNING]
+> ### READ THIS BEFORE YOU UPGRADE AN EXISTING INSTALL
+>
+> From **v1.5.1.3** (so, **v1.5.2 and later**) the container no longer runs
+> as root: it runs as a fixed non-root user, **UID/GID 1500:1500**. A
+> `vcf-token` volume created by v1.5.1 or earlier is still owned by the old
+> user, so the new image cannot write to it and **uploading or running the
+> CLI fails with `EACCES` / `EPERM`** until the ownership is corrected.
+>
+> - **Docker / Compose:** no action needed. It is corrected automatically on
+>   the next start (details below).
+> - **Kubernetes, or anything that forces a UID (`user:`, `runAsUser`):**
+>   **you must fix the volume once by hand** (details below).
+>
+> This only concerns the token/CLI volume (`/data/token`). The **depot
+> volume** (`/mnt/vcf-depot`) must already permit writes from UID 1500 -
+> if it's an NFS export or other shared storage, check that it does.
+
+(This section was previously titled "Upgrading from before v1.5.1.3".)
+
+v1.5.1.3 moved to a fixed, capability-less non-root UID/GID (1500:1500) so
+the image satisfies Kubernetes' Pod Security "restricted" profile. If you're
+running under plain Docker/Compose (no `user:` override), this needs no
+action from you: the entrypoint still starts as root by default there, and
+on every container start it self-heals an existing `vcf-token` volume's
+ownership (idempotent - a fast no-op once it's already 1500:1500) before
+dropping to 1500:1500 for the app itself - so upgrading straight from any
+older version "just works" on the next `docker compose up`.
+
+If you deploy under Kubernetes (or anywhere else that explicitly forces a
+non-root UID via the container runtime, like `k8s/generic`'s
+`securityContext.runAsUser`), the entrypoint never runs as root in the first
+place - by design, matching Pod Security "restricted" - so it can't self-heal
+an existing PVC's stale ownership from an older deployment. In that case, fix
+it once with a throwaway privileged Job/pod against the same volume, e.g.:
+
+```
+docker run --rm -v <your-vcf-token-volume>:/data/token busybox chown -R 1500:1500 /data/token
+```
+
+or the equivalent one-off Kubernetes `Job` mounting the same PVC. This never
+needs to touch the app's own Deployment or its security context.
+
 # VCF CLI Support
 The following versions of the CLI were tested and work
 
@@ -97,32 +142,6 @@ This starts the GUI on `http://localhost:8080` with:
   downloaded binaries land. Requires `nfs-common` (or equivalent) on the
   Docker host so the `local` volume driver can mount it, and `nfsvers=3`
   (this share doesn't answer on v4).
-
-### Upgrading from before v1.5.1.3
-
-v1.5.1.3 moved to a fixed, capability-less non-root UID/GID (1500:1500) so
-the image satisfies Kubernetes' Pod Security "restricted" profile. If you're
-running under plain Docker/Compose (no `user:` override), this needs no
-action from you: the entrypoint still starts as root by default there, and
-on every container start it self-heals an existing `vcf-token` volume's
-ownership (idempotent - a fast no-op once it's already 1500:1500) before
-dropping to 1500:1500 for the app itself - so upgrading straight from any
-older version, including pre-1.5.1.3, "just works" on the next
-`docker compose up`.
-
-If you deploy under Kubernetes (or anywhere else that explicitly forces a
-non-root UID via the container runtime, like `k8s/generic`'s
-`securityContext.runAsUser`), the entrypoint never runs as root in the first
-place - by design, matching Pod Security "restricted" - so it can't self-heal
-an existing PVC's stale ownership from an older deployment. In that case, fix
-it once with a throwaway privileged Job/pod against the same volume, e.g.:
-
-```
-docker run --rm -v <your-vcf-token-volume>:/data/token busybox chown -R 1500:1500 /data/token
-```
-
-or the equivalent one-off Kubernetes `Job` mounting the same PVC. This never
-needs to touch the app's own Deployment or its security context.
 
 ## Bring your own CLI
 
