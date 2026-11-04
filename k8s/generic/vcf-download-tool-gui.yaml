@@ -7,14 +7,18 @@
 #
 # Before applying, review:
 #   - the NFS server/path in the PersistentVolume (shared with the offline
-#     depot; nfsvers=3 only, enforces root_squash)
-#   - PUID/PGID in the ConfigMap (match the depot share's owner if it
-#     already has content)
+#     depot; mounted as nfsvers=3 here, enforces root_squash) - it needs to permit
+#     writes from a fixed UID/GID 1500 (or just be world-writable)
 #
-# The container starts as root so entrypoint.sh can remap the app user to
-# PUID/PGID, then drops privileges via setpriv before running node. The CLI
-# is uploaded through the GUI into the token volume — no bind mount, no
-# second volume. See the repo's README.md.
+# Runs as a fixed non-root UID/GID (1500:1500) the whole way through here -
+# no root, ever: the securityContext below sets runAsUser 1500 explicitly,
+# so the container runtime starts the image's entrypoint directly as 1500,
+# never as root. (The image's entrypoint *can* self-heal a stale-permission
+# volume from an older version of this image when it does start as root -
+# plain Docker/Compose with no user override - see entrypoint.sh and
+# README.md "Upgrading from before v1.5.1.3"; that branch just never runs
+# under this Deployment.) The CLI is uploaded through the GUI into the token
+# volume — no bind mount, no second volume. See the repo's README.md.
 #
 # This file is the kustomize base. Deploy directly with:
 #   kubectl apply -k k8s/generic/ -n <namespace>
@@ -26,7 +30,8 @@
 # Static NFS PersistentVolume for the download depot. Cluster-scoped; the
 # vcf-depot PVC below binds to it from its own side via spec.volumeName, so
 # no claimRef is set here (a claimRef would pin the binding to one
-# namespace). Same share the offline depot mounts — nfsvers=3 only (not v4).
+# namespace). Same share the offline depot mounts, as nfsvers=3 (the homelab
+# overlay switches to 4.1 - see k8s/homelab/nfs-csi-patch.yaml).
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -53,8 +58,6 @@ metadata:
 data:
   PORT: "8080"
   INTERNAL_PORT: "10080"
-  PUID: "1000"
-  PGID: "1000"
   # Heap for the bundled-JRE CLI — it sets no -Xmx of its own, so without
   # this the JVM caps its heap at ~25% of the memory limit and CLI 9.1.1.0+
   # OOMs mid-download. Raise this and the Deployment memory limit together
@@ -107,13 +110,20 @@ spec:
         app: vcf-download-tool-gui
     spec:
       securityContext:
-        # entrypoint.sh runs groupmod/usermod/chown as root, then hands off
-        # to node as PUID/PGID via setpriv.
-        runAsUser: 0
-        fsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1500
+        runAsGroup: 1500
+        # Fresh PVCs (unlike a Docker named volume) don't inherit the
+        # image's own chown - kubelet applies fsGroup to the mounted volume
+        # itself, from outside the pod, so /data/token's PVC is group-
+        # writable by 1500 on first mount without this container needing
+        # any elevated capability to do it itself.
+        fsGroup: 1500
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: app
-          image: ghcr.io/leaha00/vcf-download-tool-gui:1.5.1
+          image: ghcr.io/leaha00/vcf-download-tool-gui:1.5.2
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
@@ -125,11 +135,9 @@ spec:
               containerPort: 10080
           securityContext:
             allowPrivilegeEscalation: false
+            runAsNonRoot: true
             capabilities:
               drop: ["ALL"]
-              # Minimum for entrypoint.sh: edit /etc/passwd + /etc/group
-              # (usermod/groupmod), chown the app dirs, drop to PUID/PGID.
-              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "SETPCAP"]
           livenessProbe:
             httpGet:
               path: /api/version
@@ -171,10 +179,9 @@ metadata:
     app: vcf-download-tool-gui
 spec:
   type: LoadBalancer
-  # Pin a fixed address by uncommenting this line — the k8s/homelab/ overlay
-  # sets it.
+  # The k8s/homelab/ overlay patches this to ClusterIP and adds an Ingress.
+  # Pin a fixed address on a plain LoadBalancer deploy by uncommenting:
   # loadBalancerIP: 192.168.20.41
-  externalTrafficPolicy: Local
   selector:
     app: vcf-download-tool-gui
   ports:

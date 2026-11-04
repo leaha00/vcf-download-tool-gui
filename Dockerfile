@@ -55,17 +55,23 @@ COPY entrypoint.sh /entrypoint.sh
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
     /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 
-# Placeholder UID/GID (1500 just to avoid colliding with the base image's
-# built-in "node" user at 1000) - entrypoint.sh remaps this to PUID/PGID
-# (default 1000:1000) on every container start, so an NFS depot share owned
-# by someone else works without rebuilding the image. See README.md
-# "Permissions".
+# Fixed UID/GID (1500 just to avoid colliding with the base image's built-in
+# "node" user at 1000) - the target the app always ends up running as. No
+# more deployer-chosen PUID/PGID (that was only ever there to match an NFS
+# depot share's owner, and turned out not to matter - see entrypoint.sh).
 RUN groupadd -r -g 1500 vcfgui \
     && useradd -r -u 1500 -g vcfgui -d /app vcfgui \
     && mkdir -p /data/token /mnt/vcf-depot \
     && chown -R vcfgui:vcfgui /app /data/token /mnt/vcf-depot \
     && chmod +x /entrypoint.sh
 
+# No USER here (stays root by default) - entrypoint.sh only self-heals an
+# existing volume's ownership when it actually finds itself running as root
+# (plain Docker/Compose), and drops to 1500:1500 before exec'ing node either
+# way. Under Kubernetes with a pod securityContext forcing runAsUser 1500
+# (see k8s/generic's Deployment), the container runtime starts this script
+# as 1500 directly - it never sees root, skips the chown branch entirely,
+# and the pod still satisfies Pod Security "restricted" exactly as before.
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["node", "server/index.js"]

@@ -3,6 +3,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { CLI_BIN, TOKEN_FILE, XDG_DATA_HOME } = require('./config');
+const { isPermissionError, PERMISSION_HINT } = require('./tokenPermissionHint');
+
+function launchFailureMessage(err) {
+  const base = `Failed to launch vcf-download-tool: ${err.message}`;
+  return isPermissionError(err) ? `${base} ${PERMISSION_HINT}` : base;
+}
 
 // The CLI bundles its own JRE and sets no explicit -Xmx, so the JVM caps
 // its max heap at ~25% of the container's cgroup memory limit. At the
@@ -98,7 +104,7 @@ async function runCli(args, { timeoutMs = 120000, requireToken = true, ceip = tr
 
       child.on('error', (err) => {
         clearTimeout(timer);
-        reject(new CliError(`Failed to launch vcf-download-tool: ${err.message}`, { stdout, stderr }));
+        reject(new CliError(launchFailureMessage(err), { stdout, stderr }));
       });
 
       child.on('close', (code) => {
@@ -136,6 +142,12 @@ async function streamCli(args, onLine) {
     cleanup();
     release();
   });
+  // Without this, a failed spawn (e.g. EACCES on a stale-permission
+  // /data/token) is an unhandled 'error' event on the ChildProcess, which
+  // Node throws - crashing the whole process instead of just failing this
+  // one download. 'close' still fires afterward with a null/non-zero code,
+  // which the caller (downloadJobs.js) already treats as job failure.
+  child.on('error', (err) => onLine(`ERROR: ${launchFailureMessage(err)}`));
 
   const wire = (stream) => {
     let buf = '';

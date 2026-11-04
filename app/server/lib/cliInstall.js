@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const { CLI_DIR, CLI_STAGING_DIR, XDG_DATA_HOME } = require('./config');
 const { acquireCliLock } = require('./cliRunner');
 const cliVersion = require('./cliVersion');
+const { isPermissionError, PERMISSION_HINT } = require('./tokenPermissionHint');
 
 class CliInstallError extends Error {}
 
@@ -139,6 +140,16 @@ async function installFromUpload(archivePath) {
     fs.renameSync(CLI_STAGING_DIR, CLI_DIR);
 
     cliVersion.invalidate();
+  } catch (err) {
+    if (err instanceof CliInstallError) throw err;
+    // A stale-permission /data/token (pre-v1.5.1.3 volume, see
+    // tokenPermissionHint.js) surfaces here as a raw EACCES/EPERM from
+    // mkdirSync/renameSync etc. - translate it into the same actionable
+    // message rather than the bare OS error.
+    if (isPermissionError(err)) {
+      throw new CliInstallError(`${err.message}. ${PERMISSION_HINT}`);
+    }
+    throw err;
   } finally {
     fs.rm(archivePath, { force: true }, () => {});
     release();

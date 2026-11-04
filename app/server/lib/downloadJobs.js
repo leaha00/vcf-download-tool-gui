@@ -7,6 +7,8 @@ const depotIndex = require('./depotIndex');
 const artifactsIndex = require('./artifactsIndex');
 const jobStore = require('./jobStore');
 const { parseSize } = require('./sizeUtils');
+const integrity = require('./integrity');
+const { COMP_ROOT } = require('./depotIndex');
 const { parseTable } = require('./tableParser');
 
 const MAX_LINES = 500; // live-log tail kept in memory for the SSE modal - not persisted
@@ -19,7 +21,9 @@ const liveJobs = new Map();
 const PROGRESS_RE = /^Download Progress of\s*:\s*(.+?)\s*:\s*([\d.]+)\s*MB/;
 
 // opts (all optional):
-//   mode: 'binaries' (default) | 'artifacts'
+//   mode: 'binaries' (default) | 'artifacts' | 'esx' | 'verify'
+//         ('verify' re-checks already-downloaded binaries against Broadcom's
+//         catalog sizes/SHA-256 - no CLI involved, see verifyBinaries)
 //   sku, vcfVersion: required for 'artifacts'
 //   filter: { category } or { component } - required for 'artifacts'
 function startDownload(ids, binaries, opts = {}) {
@@ -27,7 +31,8 @@ function startDownload(ids, binaries, opts = {}) {
     throw new Error('At least one binary id is required');
   }
 
-  const mode = opts.mode === 'artifacts' ? 'artifacts' : 'binaries';
+  const mode =
+    opts.mode === 'artifacts' ? 'artifacts' : opts.mode === 'esx' ? 'esx' : opts.mode === 'verify' ? 'verify' : 'binaries';
 
   const job = jobStore.createJob(binaries);
   const jobId = job.id;
@@ -55,7 +60,11 @@ function startDownload(ids, binaries, opts = {}) {
 
   const finish = (code) => {
     jobStore.finishJob(jobId, { status: code === 0 ? 'complete' : 'error', exitCode: code });
-    emit(code === 0 ? 'Download complete.' : `Download failed (exit code ${code}).`);
+    if (mode === 'verify') {
+      emit(code === 0 ? 'Verification complete.' : 'Verification failed - see the files flagged above.');
+    } else {
+      emit(code === 0 ? 'Download complete.' : `Download failed (exit code ${code}).`);
+    }
     if (code === 0) {
       depotIndex.invalidate();
       artifactsIndex.invalidate();
@@ -69,11 +78,29 @@ function startDownload(ids, binaries, opts = {}) {
   const runner =
     mode === 'artifacts'
       ? runArtifactsDownload(jobId, binaries, opts, emit)
-      : runBinariesDownload(jobId, ids, binaries, emit);
+      : mode === 'esx'
+        ? runEsxDownload(jobId, binaries, emit)
+        : mode === 'verify'
+          ? Promise.resolve(0) // statuses are set by verifyBinaries below
+          : runBinariesDownload(jobId, ids, binaries, emit);
 
   runner
-    .then((code) => {
+    .then(async (code) => {
+      if (mode === 'verify') {
+        const failed = await verifyBinaries(jobId, binaries, emit);
+        return failed.size > 0 ? 1 : 0;
+      }
       if (mode === 'binaries') finalizeBinaryStatuses(jobId, binaries, lines, code);
+      if (mode === 'binaries' && code === 0) {
+        // The CLI exiting 0 only means it thinks it's finished - a short file
+        // would still pass. Check what landed against Broadcom's catalog.
+        const failed = await verifyBinaries(jobId, binaries, emit);
+        if (failed.size > 0) return 1;
+      }
+      return code;
+    })
+    .then((code) => {
+      if (mode === 'esx') finalizeEsxStatus(jobId, binaries, code);
       finish(code);
     })
     .catch((err) => {
@@ -209,6 +236,101 @@ async function runArtifactsDownload(jobId, binaries, opts, emit) {
   }
 
   return anyFailed ? 1 : 0;
+}
+
+// --- esx download (base images + IOVP drivers + vendor add-ons + Tools) --
+// `esx download` has no per-item selection at all - no --vcf-version, no
+// --id (confirmed against the CLI's own --help). What it pulls is governed
+// entirely by `esx configuration` (enable-host/disable-host), which
+// routes.js already synced before starting this job. So this is always a
+// single CLI invocation with one synthetic "binary" row standing in for
+// the whole depot - there's no per-file declared total to compute a
+// percent against, so the row just flips pending -> downloading -> done/
+// failed rather than showing a progress bar.
+function runEsxDownload(jobId, binaries, emit) {
+  emit(
+    `Starting ESX depot download (base images, IOVP drivers, vendor add-ons, VMware Tools) to ${DEPOT_DIR} ...`
+  );
+
+  return streamCli(
+    [
+      'esx',
+      'download',
+      `--depot-download-activation-code-file=${TOKEN_FILE}`,
+      `--depot-store=${DEPOT_DIR}`,
+    ],
+    emit
+  ).then((child) => new Promise((resolve) => child.on('close', (code) => resolve(code ?? -1))));
+}
+
+function finalizeEsxStatus(jobId, binaries, exitCode) {
+  const ok = exitCode === 0;
+  for (const b of binaries) {
+    jobStore.updateBinaryStatus(jobId, b.id, { status: ok ? 'done' : 'failed', percent: ok ? 100 : undefined });
+  }
+}
+
+// Checks the files a set of binary rows own on disk against Broadcom's
+// published size + SHA-256 (lib/integrity.js). Runs after every successful
+// binaries download and on demand ('verify' mode). Returns the Set of binary
+// ids that failed; those rows are flipped to 'failed' so a bad file can't
+// sit behind a green "done".
+async function verifyBinaries(jobId, binaries, emit) {
+  const failed = new Set();
+  const catalog = await integrity.getCatalog();
+  if (catalog.size === 0) {
+    emit('Integrity check skipped: Broadcom product version catalog not found in the depot.');
+    return failed;
+  }
+  depotIndex.invalidate();
+  const index = await depotIndex.getIndex({ forceRefresh: true });
+
+  emit('\n--- Verifying downloaded files against Broadcom catalog ---');
+  for (const b of binaries) {
+    const files = depotIndex.filesFor(index, b.component, b.version, b.type);
+    if (files.length === 0) {
+      emit(`${b.component} ${b.version}: no files on disk to verify.`);
+      jobStore.updateBinaryStatus(jobId, b.id, { status: 'failed' });
+      failed.add(b.id);
+      continue;
+    }
+    let bad = false;
+    let checked = 0;
+    for (const f of files) {
+      const full = path.join(COMP_ROOT, b.component, f);
+      try {
+        const r = await integrity.verifyFile(full, catalog, (pct) => {
+          if (pct > 0 && pct < 100) emit(`  ${f}: hashing ${pct}%`);
+        });
+        if (r.status === 'unknown') {
+          emit(`  ${f}: not in Broadcom catalog - not checked`);
+        } else if (r.status === 'ok') {
+          checked++;
+          emit(`  ${f}: OK (${r.actualSize} bytes${r.hashed ? ', SHA-256 match' : ''})`);
+        } else if (r.status === 'size-mismatch') {
+          bad = true;
+          emit(`  ${f}: SIZE MISMATCH - ${r.actualSize} bytes on disk, Broadcom says ${r.expectedSize} (short by ${r.expectedSize - r.actualSize})`);
+        } else {
+          bad = true;
+          emit(`  ${f}: CHECKSUM MISMATCH - size is right (${r.actualSize}) but SHA-256 differs from Broadcom's`);
+        }
+      } catch (err) {
+        bad = true;
+        emit(`  ${f}: could not be read (${err.message})`);
+      }
+    }
+    if (bad) {
+      failed.add(b.id);
+      jobStore.updateBinaryStatus(jobId, b.id, { status: 'failed' });
+    } else {
+      jobStore.updateBinaryStatus(jobId, b.id, { status: 'done', percent: 100 });
+      if (checked === 0) emit(`${b.component} ${b.version}: nothing in this row is covered by the catalog - presence only.`);
+    }
+  }
+  if (failed.size > 0) {
+    emit('\nDelete the flagged rows (Delete selected) and download them again.');
+  }
+  return failed;
 }
 
 function markRemainingFailed(jobId, binaries) {

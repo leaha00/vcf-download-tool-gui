@@ -29,6 +29,8 @@ The following versions of the CLI were tested and work
   new `artifacts` command, straight from the Type dropdown
 - Order by release date, size and downloaded columns
 - Log visibility
+- ESX type: download ESXi base images, IOVP drivers, vendor add-ons and VMware Tools via `esx download`, for the ESXi platform lines you tick in the GUI
+- Integrity checking: downloads are verified against Broadcom's published size and SHA-256 (from the depot's own product version catalog) after every download, truncated files show as **Incomplete**, and **Verify selected** re-checks files already on the depot
 
 ## Pictures
 
@@ -46,7 +48,9 @@ generated, and the CLI tool which can be added and updated in the GUI.
 There is also a mount for the download data, you can have this attached
 to whatever you want, I use NFS as my offline depot also mounts it,
 I have included my default but you can change this out for anything that
-works for you.
+works for you. The container runs as a fixed non-root user (UID/GID 1500) —
+if you point the depot mount at an NFS export, it needs to already permit
+writes from that UID (or just be world-writable, which is the common case).
 ```
 services:
   vcf-download-tool-gui:
@@ -63,13 +67,6 @@ services:
       - vcf-depot:/mnt/vcf-depot
     environment:
       PORT: "8080"
-      # UID/GID the app runs as - defaults to 1000:1000, which just works
-      # for a fresh depot share. Only set these if your NFS depot has
-      # pre-existing content owned by someone else (`ls -l` the mount to
-      # check); set them to match its owner. No rebuild needed either way.
-      # See README.md "Permissions".
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
 
 volumes:
   # Local, container-host-backed volume for the activation code - kept
@@ -100,6 +97,32 @@ This starts the GUI on `http://localhost:8080` with:
   downloaded binaries land. Requires `nfs-common` (or equivalent) on the
   Docker host so the `local` volume driver can mount it, and `nfsvers=3`
   (this share doesn't answer on v4).
+
+### Upgrading from before v1.5.1.3
+
+v1.5.1.3 moved to a fixed, capability-less non-root UID/GID (1500:1500) so
+the image satisfies Kubernetes' Pod Security "restricted" profile. If you're
+running under plain Docker/Compose (no `user:` override), this needs no
+action from you: the entrypoint still starts as root by default there, and
+on every container start it self-heals an existing `vcf-token` volume's
+ownership (idempotent - a fast no-op once it's already 1500:1500) before
+dropping to 1500:1500 for the app itself - so upgrading straight from any
+older version, including pre-1.5.1.3, "just works" on the next
+`docker compose up`.
+
+If you deploy under Kubernetes (or anywhere else that explicitly forces a
+non-root UID via the container runtime, like `k8s/generic`'s
+`securityContext.runAsUser`), the entrypoint never runs as root in the first
+place - by design, matching Pod Security "restricted" - so it can't self-heal
+an existing PVC's stale ownership from an older deployment. In that case, fix
+it once with a throwaway privileged Job/pod against the same volume, e.g.:
+
+```
+docker run --rm -v <your-vcf-token-volume>:/data/token busybox chown -R 1500:1500 /data/token
+```
+
+or the equivalent one-off Kubernetes `Job` mounting the same PVC. This never
+needs to touch the app's own Deployment or its security context.
 
 ## Bring your own CLI
 

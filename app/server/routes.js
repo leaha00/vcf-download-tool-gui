@@ -22,6 +22,7 @@ const {
   CATEGORY_KEYS,
   COMPONENT_KEYS,
 } = require('./lib/artifacts');
+const esx = require('./lib/esx');
 const { getDepotStorage } = require('./lib/diskUsage');
 const { getStats } = require('./lib/systemStats');
 const cliInstall = require('./lib/cliInstall');
@@ -193,10 +194,17 @@ router.get('/binaries', async (req, res) => {
     const { version, sku, type } = req.query;
     const result = await listBinaries({ version, sku, type });
     const index = await depotIndex.getIndex();
-    result.binaries = result.binaries.map((b) => ({
-      ...b,
-      downloaded: depotIndex.isDownloaded(index, b.component, b.version, b.type),
-    }));
+    result.binaries = result.binaries.map((b) => {
+      // A file that's present but the wrong size (vs Broadcom's published
+      // catalog - see lib/integrity.js) is not a usable download: surface it
+      // as `incomplete` instead of `downloaded`.
+      const incomplete = depotIndex.isIncomplete(index, b.component, b.version, b.type);
+      return {
+        ...b,
+        downloaded: !incomplete && depotIndex.isDownloaded(index, b.component, b.version, b.type),
+        incomplete,
+      };
+    });
     res.json(result);
   } catch (err) {
     handleError(res, err);
@@ -220,6 +228,26 @@ router.get('/artifacts', async (req, res) => {
       return { ...a, downloaded: st === 'downloaded', partial: st === 'partial' };
     });
     res.json({ binaries, queriedVersion: result.queriedVersion });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// ESX depot: no VCF-version/list concept (the CLI has no `esx list`) - just
+// the current host-platform scoping config, always available regardless of
+// CLI version (esx predates the 9.1.1 artifacts command).
+router.get('/esx/config', async (req, res) => {
+  try {
+    res.json(await esx.getEsxConfig());
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+router.post('/esx/host-versions', async (req, res) => {
+  try {
+    const enabled = (req.body && req.body.enabled) || [];
+    res.json(await esx.syncHostVersions(enabled));
   } catch (err) {
     handleError(res, err);
   }
@@ -267,6 +295,10 @@ router.post('/download', (req, res) => {
       opts.sku = body.sku || 'VCF';
       opts.vcfVersion = body.vcfVersion;
       opts.filter = category ? { category } : { component };
+    } else if (body.mode === 'esx') {
+      opts.mode = 'esx';
+    } else if (body.mode === 'verify') {
+      opts.mode = 'verify';
     }
 
     const jobId = startDownload(ids, binaries, opts);

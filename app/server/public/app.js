@@ -267,29 +267,59 @@ function applyCliCapabilities() {
     select.appendChild(group);
   }
 
+  // ESX depot download - not version-gated (esx has been in the CLI since
+  // well before 9.1.1's artifacts command), so this group is always offered
+  // regardless of artifactsSupported. Only one option: esx download has no
+  // per-item/category selection to expand into separate options the way
+  // artifacts does.
+  const esxGroup = document.createElement('optgroup');
+  esxGroup.label = 'ESX';
+  addOption(esxGroup, 'ESX_DEPOT', 'Vendor add-ons & images', { mode: 'esx' });
+  select.appendChild(esxGroup);
+
   const stillThere = previous && [...select.options].some((o) => o.value === previous);
   select.value = stillThere ? previous : (state.artifactsSupported ? 'INSTALL' : 'BOTH');
   if (select._cs) select._cs.sync();
   syncBrowseModeFromType();
+  updateBrowsePanels();
 
   // If the effective Type changed (e.g. CLI version resolved after the user
   // had already picked a release and the default moved from Both to
   // Install), re-list against the new filter.
-  if (previous && select.value !== previous && state.selectedVersion) loadBinaries();
+  if (previous && select.value !== previous && state.browseMode !== 'esx' && state.selectedVersion) {
+    loadBinaries();
+  }
 }
 
 // Reads mode/category/component off the selected Type <option> into state.
 function syncBrowseModeFromType() {
   const opt = $('type-select').selectedOptions[0];
-  if (opt && opt.dataset.mode === 'artifacts') {
+  const mode = opt && opt.dataset.mode;
+  if (mode === 'artifacts') {
     state.browseMode = 'artifacts';
     state.artifactFilter = opt.dataset.category
       ? { category: opt.dataset.category }
       : { component: opt.dataset.component };
+  } else if (mode === 'esx') {
+    state.browseMode = 'esx';
+    state.artifactFilter = null;
   } else {
     state.browseMode = 'binaries';
     state.artifactFilter = null;
   }
+}
+
+// Swaps the binaries/artifacts table for the ESX depot panel (and back)
+// depending on browseMode - esx download has no release/version concept at
+// all, so it doesn't belong in the same table as everything else.
+function updateBrowsePanels() {
+  const isEsx = state.browseMode === 'esx';
+  $('table-panel').classList.toggle('hidden', isEsx);
+  $('esx-panel').classList.toggle('hidden', !isEsx);
+  $('current-version').textContent = isEsx
+    ? 'No release needed'
+    : (state.selectedVersion || 'No version selected');
+  if (isEsx) loadEsxConfig();
 }
 
 // ---------- Storage ----------
@@ -694,8 +724,13 @@ function selectVersion(version, el) {
   document.querySelectorAll('.release-version-item.active').forEach((n) => n.classList.remove('active'));
   if (el) el.classList.add('active');
   state.selectedVersion = version;
-  $('current-version').textContent = version;
   switchView('browse');
+  // ESX depot downloads aren't scoped to a VCF release at all - picking a
+  // release while Type = ESX just records it (in case the user switches
+  // Type back) without touching the ESX panel or firing a `binaries`/
+  // `artifacts` list.
+  if (state.browseMode === 'esx') return;
+  $('current-version').textContent = version;
   loadBinaries();
 }
 
@@ -706,7 +741,8 @@ $('releases-nav-header').addEventListener('click', () => switchView('browse'));
 $('sku-select').addEventListener('change', () => state.selectedVersion && loadBinaries());
 $('type-select').addEventListener('change', () => {
   syncBrowseModeFromType();
-  if (state.selectedVersion) loadBinaries();
+  updateBrowsePanels();
+  if (state.browseMode !== 'esx' && state.selectedVersion) loadBinaries();
 });
 $('search-input').addEventListener('input', (e) => {
   state.searchQuery = e.target.value;
@@ -848,6 +884,7 @@ function downloadedCellHtml(b, live) {
     }
   }
   if (b.downloaded) return '<span class="downloaded-badge">✓ Downloaded</span>';
+  if (b.incomplete) return '<span class="failed-badge" title="A file for this row is on disk but its size differs from Broadcom\'s published size - likely truncated. Select it and use Verify, then Delete and re-download.">Incomplete</span>';
   if (b.partial) return '<span class="partial-badge" title="Some files present but the OCI image pull is incomplete">Partial</span>';
   return '';
 }
@@ -863,7 +900,7 @@ const SORT_ACCESSORS = {
   component_full_name: (b) => (b.component_full_name || '').toLowerCase(),
   release_date: (b) => parseDate(b.release_date),
   size: (b) => parseSize(b.size),
-  downloaded: (b) => (b.downloaded ? 2 : b.partial ? 1 : 0),
+  downloaded: (b) => (b.downloaded ? 2 : b.partial || b.incomplete ? 1 : 0),
 };
 
 function applySort() {
@@ -936,12 +973,13 @@ function updateSelectionUi() {
   // Deletable = anything on disk. For artifacts that includes "partial"
   // rows (interrupted OCI pulls) so a half-download can be cleared out.
   const downloadedCount = selected.filter(
-    (b) => b.downloaded || (state.browseMode === 'artifacts' && b.partial)
+    (b) => b.downloaded || b.incomplete || (state.browseMode === 'artifacts' && b.partial)
   ).length;
 
   $('selection-summary').textContent = count > 0 ? `${count} selected — ${formatSize(totalBytes)}` : '';
   $('download-btn').disabled = count === 0;
   $('delete-btn').disabled = downloadedCount === 0;
+  $('verify-btn').disabled = state.browseMode === 'artifacts' || downloadedCount === 0;
   $('delete-btn').textContent = downloadedCount > 0 ? `Delete selected (${downloadedCount})` : 'Delete selected';
 
   const visibleSelected = state.visibleBinaries.filter((b) => state.selectedIds.has(b.id)).length;
@@ -1081,10 +1119,32 @@ $('download-btn').addEventListener('click', async () => {
   }
 });
 
+// Re-checks already-downloaded binaries against the size + SHA-256 Broadcom
+// publishes in the depot's own product version catalog (server-side job, no
+// CLI involved). Binaries mode only - OCI artifacts carry their own .sha256
+// sidecars and are judged complete by artifactsIndex.
+$('verify-btn').addEventListener('click', async () => {
+  const binaries = state.binaries.filter(
+    (b) => state.selectedIds.has(b.id) && (b.downloaded || b.incomplete)
+  );
+  if (binaries.length === 0) return;
+  openDownloadLog(null);
+  try {
+    const { jobId } = await api('/download', {
+      method: 'POST',
+      body: JSON.stringify({ mode: 'verify', ids: binaries.map((b) => b.id), binaries }),
+    });
+    streamDownload(jobId);
+    refreshJobs();
+  } catch (err) {
+    appendLog(`Error: ${err.message}`);
+  }
+});
+
 $('delete-btn').addEventListener('click', async () => {
   const artifacts = state.browseMode === 'artifacts';
   const toDelete = state.binaries.filter(
-    (b) => state.selectedIds.has(b.id) && (b.downloaded || (artifacts && b.partial))
+    (b) => state.selectedIds.has(b.id) && (b.downloaded || b.incomplete || (artifacts && b.partial))
   );
   if (toDelete.length === 0) return;
 
@@ -1108,6 +1168,7 @@ $('delete-btn').addEventListener('click', async () => {
     for (const b of toDelete) {
       b.downloaded = false;
       b.partial = false;
+      b.incomplete = false;
     }
     state.selectedIds.clear();
     applySort();
@@ -1122,6 +1183,88 @@ $('delete-btn').addEventListener('click', async () => {
     );
   } catch (err) {
     toast(err.message, true);
+  }
+});
+
+// ---------- ESX depot ----------
+// No list/select-rows step here (the CLI has no `esx list` and `esx
+// download` takes no per-item selection) - just a host-platform scoping
+// checklist, synced via /api/esx/host-versions, then one unscoped
+// `esx download` job streamed through the same modal as everything else.
+let esxHostVersions = []; // [{key, label, enabled}]
+
+async function loadEsxConfig() {
+  const wrap = $('esx-host-versions');
+  wrap.innerHTML = '<div class="hint">Loading…</div>';
+  try {
+    const data = await api('/esx/config');
+    esxHostVersions = data.hostPlatforms || [];
+    renderEsxHostVersions();
+  } catch (err) {
+    wrap.innerHTML = `<div class="hint">Could not load ESX configuration: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderEsxHostVersions() {
+  const wrap = $('esx-host-versions');
+  wrap.innerHTML = '';
+  if (esxHostVersions.length === 0) {
+    wrap.innerHTML = '<div class="hint">No ESXi platform lines available.</div>';
+    return;
+  }
+  for (const h of esxHostVersions) {
+    const label = document.createElement('label');
+    label.className = 'checkbox-row';
+    label.innerHTML = `<input type="checkbox" class="esx-host-check" data-key="${escapeHtml(h.key)}" ${h.enabled ? 'checked' : ''} /> ${escapeHtml(h.label)}`;
+    wrap.appendChild(label);
+  }
+}
+
+$('esx-download-btn').addEventListener('click', async () => {
+  const enabled = [...document.querySelectorAll('.esx-host-check:checked')].map((cb) => cb.dataset.key);
+  if (enabled.length === 0) {
+    toast('Pick at least one ESXi platform line first.', true);
+    return;
+  }
+
+  const btn = $('esx-download-btn');
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  try {
+    // Persist the checked lines to the CLI's own config before downloading
+    // - esx download has no way to scope itself per-invocation. This is a
+    // real CLI invocation (JVM startup + compatibility-data fetch), so it
+    // routinely takes 10-30s - without an interim label the button just
+    // sits greyed out that whole time with nothing else on screen, which
+    // reads as stuck even though it's working.
+    btn.textContent = 'Syncing ESXi platform selection…';
+    const synced = await api('/esx/host-versions', { method: 'POST', body: JSON.stringify({ enabled }) });
+    esxHostVersions = synced.hostPlatforms || esxHostVersions;
+    renderEsxHostVersions();
+
+    const binaries = [
+      {
+        id: 'esx-depot',
+        component: 'ESX',
+        component_full_name: 'ESX depot (base images, IOVP drivers, vendor add-ons, VMware Tools)',
+        version: '',
+        size: '',
+      },
+    ];
+
+    btn.textContent = 'Starting download…';
+    openDownloadLog(null);
+    const { jobId } = await api('/download', {
+      method: 'POST',
+      body: JSON.stringify({ mode: 'esx', ids: ['esx-depot'], binaries }),
+    });
+    streamDownload(jobId);
+    refreshJobs();
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
   }
 });
 

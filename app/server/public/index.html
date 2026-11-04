@@ -122,7 +122,7 @@
           <div class="current-version" id="current-version">No version selected</div>
         </div>
 
-        <div class="panel table-panel">
+        <div id="table-panel" class="panel table-panel">
           <div class="table-toolbar">
             <input id="search-input" type="text" placeholder="Search full name…" class="search-input" />
             <label class="select-all-wrap">
@@ -131,6 +131,7 @@
             </label>
             <span id="selection-summary" class="meta"></span>
             <button id="download-btn" class="btn btn-primary" disabled>Download selected</button>
+            <button id="verify-btn" class="btn" disabled title="Check selected downloaded files against Broadcom's published size and SHA-256">Verify selected</button>
             <button id="delete-btn" class="btn btn-danger" disabled>Delete selected</button>
           </div>
           <div class="table-wrap">
@@ -150,6 +151,23 @@
                 <tr><td colspan="7" class="hint">Pick a version from the left to list its binaries.</td></tr>
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <div id="esx-panel" class="panel esx-panel hidden">
+          <h2 style="margin-top:0">ESX depot</h2>
+          <p class="hint">
+            Downloads the ESX base images, IOVP driver packages, vendor add-ons
+            (Dell/HPE/Lenovo/Cisco/…) and VMware Tools together in one pass — the CLI has
+            no way to fetch vendor add-ons on their own; all four always come bundled in a
+            single <code>esx download</code>. Pick which ESXi platform lines to include below.
+            Nothing older than 8.0 is offered — 6.7 and 7.0 are always excluded.
+          </p>
+          <div id="esx-host-versions" class="esx-host-versions">
+            <div class="hint">Loading…</div>
+          </div>
+          <div class="modal-actions">
+            <button id="esx-download-btn" class="btn btn-primary">Download ESX depot</button>
           </div>
         </div>
       </div>

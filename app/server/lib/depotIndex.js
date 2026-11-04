@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { DEPOT_DIR } = require('./config');
+const integrity = require('./integrity');
 
 // Downloads land under <depot-store>/PROD/COMP/<COMPONENT>/... and every
 // top-level filename the CLI writes embeds the exact "Version" string shown
@@ -21,18 +22,23 @@ const { DEPOT_DIR } = require('./config');
 const COMP_ROOT = path.join(DEPOT_DIR, 'PROD', 'COMP');
 const CACHE_TTL_MS = 2 * 60 * 1000;
 
-let cache = null; // { fetchedAt, byComponent: Map<string, string[]> }
+let cache = null; // { fetchedAt, byComponent: Map<string, string[]>, shortFiles: Set<"COMP/file"> }
 let inflight = null;
 
 async function scan() {
   const byComponent = new Map();
+  // Files whose on-disk size differs from Broadcom's published size (see
+  // integrity.js) - a stat per catalogued file, no hashing, so a rescan stays
+  // cheap. Hashing happens after a download and on demand.
+  const shortFiles = new Set();
+  const catalog = await integrity.getCatalog();
 
   let entries;
   try {
     entries = await fs.promises.readdir(COMP_ROOT, { withFileTypes: true });
   } catch (err) {
     // Depot store not populated yet, or not mounted - nothing downloaded.
-    return { fetchedAt: Date.now(), byComponent };
+    return { fetchedAt: Date.now(), byComponent, shortFiles };
   }
 
   await Promise.all(
@@ -42,9 +48,19 @@ async function scan() {
         const compDir = path.join(COMP_ROOT, e.name);
         try {
           const files = await fs.promises.readdir(compDir, { withFileTypes: true });
-          byComponent.set(
-            e.name,
-            files.filter((f) => f.isFile()).map((f) => f.name)
+          const names = files.filter((f) => f.isFile()).map((f) => f.name);
+          byComponent.set(e.name, names);
+          await Promise.all(
+            names
+              .filter((n) => catalog.has(n))
+              .map(async (n) => {
+                try {
+                  const { size } = await fs.promises.stat(path.join(compDir, n));
+                  if (size !== catalog.get(n).size) shortFiles.add(`${e.name}/${n}`);
+                } catch (err) {
+                  // vanished mid-scan - not a size problem
+                }
+              })
           );
         } catch (err) {
           byComponent.set(e.name, []);
@@ -52,7 +68,7 @@ async function scan() {
       })
   );
 
-  return { fetchedAt: Date.now(), byComponent };
+  return { fetchedAt: Date.now(), byComponent, shortFiles };
 }
 
 async function getIndex({ forceRefresh = false } = {}) {
@@ -132,8 +148,33 @@ function isDownloaded(index, component, version, type) {
   return candidates.some((f) => !isExcludedFor(component, type, f));
 }
 
+// True when a file that belongs to this row is on disk but its size doesn't
+// match Broadcom's published size - i.e. truncated or still being written.
+// Same candidate selection as isDownloaded so the two can't disagree about
+// which files a row owns.
+function isIncomplete(index, component, version, type) {
+  if (!version || !index.shortFiles || index.shortFiles.size === 0) return false;
+  const files = index.byComponent.get(component);
+  if (!files) return false;
+  const vcfVersion = version.split('.').slice(0, 4).join('.');
+  return files.some(
+    (f) =>
+      matchesVersion(f, vcfVersion) &&
+      !isExcludedFor(component, type, f) &&
+      index.shortFiles.has(`${component}/${f}`)
+  );
+}
+
+// The on-disk files a row owns (flat, version-boundary matched, type-rule
+// filtered) - what integrity verification and delete both operate on.
+function filesFor(index, component, version, type) {
+  const files = index.byComponent.get(component) || [];
+  const vcfVersion = String(version || '').split('.').slice(0, 4).join('.');
+  return files.filter((f) => matchesVersion(f, vcfVersion) && !isExcludedFor(component, type, f));
+}
+
 function invalidate() {
   cache = null;
 }
 
-module.exports = { getIndex, isDownloaded, invalidate, matchesVersion, isExcludedFor, COMP_ROOT };
+module.exports = { getIndex, isDownloaded, isIncomplete, filesFor, invalidate, matchesVersion, isExcludedFor, COMP_ROOT };
